@@ -1,6 +1,6 @@
 {
   "name": "edinot",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "description": "Edinot — a local-first note app (Markdown, canvases, databases, calendar) with its own hub and encrypted sync",
   "keywords": [
     "notes",
