@@ -58,7 +58,7 @@ export async function ensureHub({ start = true, timeoutMs = 15000 } = {}) {
   const logFile = path.join(hubDir(), 'hub.log');
   let tail = '';
   try { tail = readFileSync(logFile, 'utf8').trim().split('\n').slice(-3).join(' | '); } catch {}
-  throw new Error(`el hub no arrancó en ${Math.round(timeoutMs / 1000)} s${tail ? ` (${tail})` : ''}. Registro: ${logFile}`);
+  throw new Error(`the hub did not start within ${Math.round(timeoutMs / 1000)} s${tail ? ` (${tail})` : ''}. Log: ${logFile}`);
 }
 
 /** Para el hub en marcha. Devuelve true si había uno. */
@@ -85,7 +85,7 @@ export async function hubConfig({ start = true, workspaceId = null } = {}) {
     body: JSON.stringify({ email: 'local', password: info.key }),
     signal: AbortSignal.timeout(5000),
   });
-  if (!res.ok) throw new Error(`el hub rechazó la clave (HTTP ${res.status})`);
+  if (!res.ok) throw new Error(`the hub rejected the key (HTTP ${res.status})`);
   const r = await res.json();
   const wsList = r.workspaces || [];
   const chosen = wsList.find(w => w.id === workspaceId) || wsList[0] || null;

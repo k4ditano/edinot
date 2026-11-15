@@ -38,7 +38,7 @@ test('sin fijar el certificado, el cliente NO se conecta (es autofirmado)', asyn
 });
 
 test('una huella equivocada se rechaza; la correcta devuelve el certificado a fijar', async () => {
-  await assert.rejects(pinFromLink(base, 'A'.repeat(43)), /NO coincide/);
+  await assert.rejects(pinFromLink(base, 'A'.repeat(43)), /does NOT match/);
   const pem = await pinFromLink(base, hub.info.fingerprint);
   assert.equal(fingerprintOfPem(pem), hub.info.fingerprint);
 });

@@ -22,24 +22,24 @@ Auth
   logout
   whoami
 
-Servidor y equipos (funciona en un VPS sin pantalla)
-  serve [--host 0.0.0.0] [--port 17870] [--public-url https://tu-hub] [--no-qr]
-  pair [--url https://tu-hub]        código + QR en la terminal para añadir un equipo
-  join <código|enlace> [--server U] [--name N]   en el equipo nuevo
-  share <vault> [<vault>…] [--read-only] [--url U]   código para dar acceso SOLO a esos vaults
-  shares                             accesos compartidos activos (quitar uno: devices revoke <id>)
+Server and devices (works on a VPS with no screen)
+  serve [--host 0.0.0.0] [--port 17870] [--public-url https://your-hub] [--no-qr]
+  pair [--url https://your-hub]      a code + QR in the terminal to add a device
+  join <code|link> [--server U] [--name N]   on the new device
+  share <vault> [<vault>…] [--read-only] [--url U]   a code that gives access to ONLY those vaults
+  shares                             active shared accesses (remove one: devices revoke <id>)
   devices [list|revoke <id>]
 
-Exportar a Markdown (legible sin Edinot)
-  export <carpeta> [--vault <n>] [--attachments] [--no-prune]
+Export to Markdown (readable without Edinot)
+  export <folder> [--vault <n>] [--attachments] [--no-prune]
 
-Hub local (funciona sin red; se arranca solo)
+Local hub (works offline; starts by itself)
   hub [status|start|stop|run|pull|push]
 
 Vaults
-  status [--json]                    dónde están tus datos y con qué se sincronizan
-  vaults [--json]                    lista de vaults con su número de notas
-  vaults create <nombre>             crea un vault
+  status [--json]                    where your data lives and what it syncs with
+  vaults [--json]                    list vaults with their note counts
+  vaults create <name>               create a vault
 
 Workspaces
   workspaces
@@ -120,13 +120,13 @@ async function printQr(text) {
   process.stdout.write((await QRCode.toString(text, { type: 'terminal', small: true })) + '\n');
 }
 function printPairing(r, { ttlMin = 5 } = {}) {
-  process.stdout.write(`\nCódigo para añadir un equipo: ${r.display}   (un solo uso, caduca en ${ttlMin} min)\n`);
+  process.stdout.write(`\nCode to add a device: ${r.display}   (single use, expires in ${ttlMin} min)\n`);
   if (r.uri) {
     process.stdout.write(`Enlace: ${r.uri}\n`);
-    if (r.fingerprint) process.stdout.write('(El enlace lleva la huella del certificado del servidor: úsalo completo; el código suelto no basta en un servidor cifrado con certificado propio.)\n');
+    if (r.fingerprint) process.stdout.write('(The link carries the fingerprint of the server\'s certificate: use it whole; the bare code is not enough for a server encrypted with its own certificate.)\n');
     return printQr(r.uri);
   }
-  process.stdout.write('Falta la dirección pública para el QR: usa --url <https://tu-hub> (o arranca con --public-url).\n');
+  process.stdout.write('The public address is missing for the QR: use --url <https://your-hub> (or start with --public-url).\n');
 }
 // Acepta «ABCDE-FGHJK» o un enlace edinot://pair?u=…&c=…
 function parsePairInput(input, serverFlag) {
@@ -141,27 +141,27 @@ function parsePairInput(input, serverFlag) {
 // Informe de una copia de documentos y adjuntos (pull y push).
 function printCopyReport(rep, dryRun, t0) {
   const mb = (n) => (n / 1048576).toFixed(1) + ' MB';
-  process.stdout.write(`\nDocumentos: ${rep.docs} copiados (${mb(rep.bytes)}), ${rep.skippedExisting.length} ya estaban, ${rep.failed.length} con error\n`);
-  process.stdout.write(`Adjuntos:   ${rep.blobs.referenced} mencionados, ${rep.blobs.copied} copiados, ${rep.blobs.already} ya estaban, ${rep.blobs.missing.length} que el origen ya no tiene, ${rep.blobs.failed.length} con error\n`);
-  if (!dryRun) process.stdout.write(`Verificación: ${rep.verified} documentos releídos del destino y completos${rep.notVerified.length ? `, ${rep.notVerified.length} SIN verificar` : ''}\n`);
-  process.stdout.write(`Tiempo: ${((Date.now() - t0) / 1000).toFixed(1)} s\n`);
+  process.stdout.write(`\nDocuments:   ${rep.docs} copied (${mb(rep.bytes)}), ${rep.skippedExisting.length} already there, ${rep.failed.length} failed\n`);
+  process.stdout.write(`Attachments: ${rep.blobs.referenced} referenced, ${rep.blobs.copied} copied, ${rep.blobs.already} already there, ${rep.blobs.missing.length} the source no longer has, ${rep.blobs.failed.length} failed\n`);
+  if (!dryRun) process.stdout.write(`Verification: ${rep.verified} documents read back from the destination and complete${rep.notVerified.length ? `, ${rep.notVerified.length} NOT verified` : ''}\n`);
+  process.stdout.write(`Time: ${((Date.now() - t0) / 1000).toFixed(1)} s\n`);
   for (const f of rep.failed.slice(0, 10)) process.stdout.write(`  error: ${f.name}: ${f.error}\n`);
-  for (const n of rep.notVerified.slice(0, 10)) process.stdout.write(`  sin verificar: ${n}\n`);
-  for (const f of rep.blobs.failed.slice(0, 10)) process.stdout.write(`  adjunto con error: ${f.sha}: ${f.error}\n`);
+  for (const n of rep.notVerified.slice(0, 10)) process.stdout.write(`  not verified: ${n}\n`);
+  for (const f of rep.blobs.failed.slice(0, 10)) process.stdout.write(`  attachment failed: ${f.sha}: ${f.error}\n`);
 }
 
 async function withSession(fn) {
   let cfg;
   try { cfg = await resolveConfig(); }
   catch (err) { require_(false, err.message); }
-  require_(cfg && (cfg.token || cfg.mode === 'local'), 'no hay sesión ni hub local; prueba: edinot hub start');
+  require_(cfg && (cfg.token || cfg.mode === 'local'), 'no session and no local hub; try: edinot hub start');
   require_(cfg.mode === 'local' || cfg.workspaceId, 'no workspace selected; run: edinot workspaces && edinot use <id>');
   const session = await ops.open(cfg);
   try {
     const out = await fn(session, cfg);
     // Acceso compartido de solo lectura: el servidor descarta las escrituras; no se aparenta que se guardaron.
     const lost = session.readOnlyWrites ? session.readOnlyWrites() : [];
-    if (lost.length) throw new Error('este acceso es de SOLO LECTURA: el cambio no se ha guardado en el servidor');
+    if (lost.length) throw new Error('this access is READ-ONLY: the change was not saved on the server');
     return out;
   }
   finally { await session.close(); }
@@ -194,16 +194,16 @@ async function main() {
         const sub = argv[1] || 'status';
         if (sub === 'start') {
           const info = await ensureHub();
-          process.stdout.write(`ok hub en marcha: ${info.url} (pid ${info.pid})\ndatos: ${info.dir || hubDir()}\n`);
+          process.stdout.write(`ok hub running: ${info.url} (pid ${info.pid})\ndata: ${info.dir || hubDir()}\n`);
         } else if (sub === 'stop') {
           const was = await stopHub();
-          process.stdout.write(was ? 'ok hub parado\n' : 'no había hub en marcha\n');
+          process.stdout.write(was ? 'ok hub stopped\n' : 'there was no hub running\n');
         } else if (sub === 'status') {
           const info = readHubInfo();
           if (info && await hubAlive(info)) {
-            process.stdout.write(`hub en marcha\n  url:   ${info.url}\n  pid:   ${info.pid}\n  desde: ${info.startedAt}\n  datos: ${info.dir || hubDir()}\n`);
+            process.stdout.write(`hub running\n  url:   ${info.url}\n  pid:   ${info.pid}\n  since: ${info.startedAt}\n  data:  ${info.dir || hubDir()}\n`);
           } else {
-            process.stdout.write(`hub parado (datos en ${hubDir()})\nse arranca solo al usar cualquier comando, o con: edinot hub start\n`);
+            process.stdout.write(`hub stopped (data in ${hubDir()})\nit starts by itself when you use any command, or with: edinot hub start\n`);
           }
         } else if (sub === 'pull') {
           // Trae una copia de un workspace remoto al hub. El servidor remoto no recibe nada.
@@ -211,7 +211,7 @@ async function main() {
           const server = flag(argv, 'server') || (saved && saved.token ? saved.server : null);
           let token = flag(argv, 'token') || (saved && saved.token && saved.server === server ? saved.token : null);
           const email = flag(argv, 'email'), password = flag(argv, 'password');
-          require_(server, 'pull necesita --server <url> (o una sesión remota guardada: edinot login)');
+          require_(server, 'pull needs --server <url> (or a saved remote session: edinot login)');
           if (!token) {
             require_(email && password, 'pull necesita --token, o --email y --password');
             token = (await api.login(server, email, password)).token;
@@ -222,8 +222,8 @@ async function main() {
           require_(hubCfg && hubCfg.workspaceId, 'el hub no tiene workspace');
           require_(server.replace(/\/$/, '') !== hubCfg.server.replace(/\/$/, ''), 'el origen es el propio hub');
           const dryRun = flagBool(argv, 'dry-run');
-          process.stdout.write(`${dryRun ? 'Simulación: ' : ''}trayendo ${server} (workspace ${wsRemote}) → hub ${hubCfg.server} (workspace ${hubCfg.workspaceId})\n`);
-          process.stdout.write('El servidor remoto solo se lee: no recibe ningún cambio.\n');
+          process.stdout.write(`${dryRun ? 'Dry run: ' : ''}pulling ${server} (workspace ${wsRemote}) → hub ${hubCfg.server} (workspace ${hubCfg.workspaceId})\n`);
+          process.stdout.write('The remote server is only read: it receives no change.\n');
           const t0 = Date.now();
           const rep = await pullWorkspace({
             remote: { server, token, workspaceId: wsRemote },
@@ -247,18 +247,18 @@ async function main() {
           require_(target, 'push necesita --to <url del hub de destino>');
           require_(token, 'push necesita una credencial: --token <t> (o la variable EDINOT_PUSH_TOKEN), o estar emparejado con ese hub');
           const local = await hubConfig();
-          require_(local && local.workspaceId, 'no hay hub local con datos en este equipo');
-          require_(target.replace(/\/$/, '') !== local.server.replace(/\/$/, ''), 'el destino es el propio hub de este equipo');
+          require_(local && local.workspaceId, 'there is no local hub with data on this computer');
+          require_(target.replace(/\/$/, '') !== local.server.replace(/\/$/, ''), 'the destination is this computer\'s own hub');
           if (process.env.EDINOT_PUSH_CA) registerPin(target, process.env.EDINOT_PUSH_CA);
           const tws = Number(flag(argv, 'workspace')) || 0;
           let destWs = tws;
           if (!destWs) {
             const list = (await api.workspaces(target, token)).workspaces || [];
-            require_(list.length, 'el hub de destino no tiene ningún workspace');
+            require_(list.length, 'the destination hub has no workspace');
             destWs = list[0].id;
           }
           const dryRun = flagBool(argv, 'dry-run');
-          process.stdout.write(`${dryRun ? 'Simulación: ' : ''}copiando el hub de este equipo → ${target} (workspace ${destWs})\n`);
+          process.stdout.write(`${dryRun ? 'Dry run: ' : ''}copying this computer\'s hub → ${target} (workspace ${destWs})\n`);
           const t0 = Date.now();
           const rep = await pullWorkspace({
             remote: { server: local.server, token: local.token, workspaceId: local.workspaceId },
@@ -297,24 +297,24 @@ async function main() {
         const tlsOpt = flagBool(argv, 'no-tls') ? false : flagBool(argv, 'tls') ? true : undefined;
         try { hub = await startHub({ host, port, publicUrl, allowedHosts: allowed, tls: tlsOpt, renewCert: flagBool(argv, 'new-cert') }); }
         catch (err) {
-          if (err && err.code === 'ALREADY_RUNNING') require_(false, 'ya hay un hub en marcha con estos datos. Paralo con: edinot hub stop');
+          if (err && err.code === 'ALREADY_RUNNING') require_(false, 'a hub is already running with this data. Stop it with: edinot hub stop');
           if (err && err.code === 'PORT_BUSY') require_(false, `${err.message}. Elige otro con --port <n>.`);
           throw err;
         }
         process.stdout.write(`hub escuchando en ${host}:${hub.info.port}  (datos: ${hub.info.dir})\n`);
         const shownUrl = hub.info.publicUrl || publicUrl;
-        if (shownUrl) process.stdout.write(`dirección pública: ${shownUrl}\n`);
-        if (hub.info.tls) process.stdout.write(`cifrado: TLS con certificado propio (huella ${hub.info.fingerprint}). Los equipos se emparejan con el enlace, que la lleva.\n`);
+        if (shownUrl) process.stdout.write(`public address: ${shownUrl}\n`);
+        if (hub.info.tls) process.stdout.write(`encryption: TLS with its own certificate (fingerprint ${hub.info.fingerprint}). Devices pair with the link, which carries it.\n`);
         if (/^http:\/\//i.test(shownUrl || '') && !/^(localhost|127\.)/.test(new URL(shownUrl).hostname)) {
-          process.stdout.write('AVISO: la dirección pública es http (sin cifrar). Pon HTTPS delante (Caddy, nginx…) antes de usarlo fuera de una red de confianza.\n');
+          process.stdout.write('WARNING: the public address is http (unencrypted). Put HTTPS in front (Caddy, nginx…) before using it outside a trusted network.\n');
         }
         if (host !== '127.0.0.1' && !publicUrl) {
-          process.stdout.write('AVISO: sin --public-url solo aceptará peticiones dirigidas a 127.0.0.1. Pasa --public-url https://<ip o dominio>:<puerto> (o --allow-host).\n');
+          process.stdout.write('WARNING: without --public-url it only accepts requests addressed to 127.0.0.1. Pass --public-url https://<ip or domain>:<port> (or --allow-host).\n');
         }
         if (!flagBool(argv, 'no-qr') && hub.devices.list.length === 0) {
-          process.stdout.write('\nAún no hay ningún equipo emparejado. Añade el primero:');
+          process.stdout.write('\nNo device is paired yet. Add the first one:');
           await printPairing(hub.createPairing());
-          process.stdout.write('Más códigos, cuando quieras:  edinot pair\n');
+          process.stdout.write('More codes, whenever you want:  edinot pair\n');
         }
         const bye = async () => { await hub.stop(); process.exit(0); };
         process.on('SIGINT', bye); process.on('SIGTERM', bye);
@@ -324,14 +324,14 @@ async function main() {
       case 'pair': {
         // Pide al hub de este equipo un código para emparejar otro equipo.
         const cfg = await hubConfig();
-        require_(cfg && cfg.token, 'no hay hub en marcha en este equipo (arráncalo con: edinot serve)');
+        require_(cfg && cfg.token, 'there is no hub running on this computer (start it with: edinot serve)');
         const info = readHubInfo();
         const res = await hubFetch(cfg.server.replace(/\/$/, '') + '/pair/start', {
           method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.token}` },
           body: JSON.stringify({ url: flag(argv, 'url') || (info && info.publicUrl) || undefined }),
         });
         const r = await res.json().catch(() => ({}));
-        require_(res.ok, r.error || `el hub respondió ${res.status}`);
+        require_(res.ok, r.error || `the hub answered ${res.status}`);
         await printPairing(r);
         break;
       }
@@ -340,8 +340,8 @@ async function main() {
         const parsed = parsePairInput(argv[1], flag(argv, 'server'));
         const { server, code } = parsed;
         const fp = parsed.fp || flag(argv, 'fingerprint');
-        require_(code, 'join necesita el código o el enlace: edinot join ABCDE-FGHJK --server https://tu-hub');
-        require_(server, 'falta la dirección del hub: usa el enlace completo o --server <https://tu-hub>');
+        require_(code, 'join needs the code or the link: edinot join ABCDE-FGHJK --server https://your-hub');
+        require_(server, 'the hub address is missing: use the whole link or --server <https://your-hub>');
         const name = flag(argv, 'name') || os.hostname().split('.')[0];
         // Servidor con certificado propio: se fija el certificado cuya huella coincide con la del enlace.
         let tlsCa = null;
@@ -356,17 +356,17 @@ async function main() {
           });
         } catch (err) {
           const c = err && err.cause && (err.cause.code || err.cause.message) || err.message;
-          if (/SELF.SIGNED|UNABLE_TO_VERIFY|CERT/i.test(String(c))) require_(false, 'el servidor usa un certificado propio: usa el enlace completo (edinot://…), que lleva su huella, o añade --fingerprint <huella>');
+          if (/SELF.SIGNED|UNABLE_TO_VERIFY|CERT/i.test(String(c))) require_(false, 'the server uses a certificate of its own: use the whole link (edinot://…), which carries its fingerprint, or add --fingerprint <fingerprint>');
           require_(false, `no se pudo contactar con ${server}: ${c}`);
         }
         const r = await res.json().catch(() => ({}));
-        require_(res.ok, r.error || `el hub respondió ${res.status}`);
+        require_(res.ok, r.error || `the hub answered ${res.status}`);
         saveConfig({
           server, token: r.token, email: r.email, userId: r.userId, workspaces: r.workspaces || [],
           workspaceId: (r.workspaces && r.workspaces[0] && r.workspaces[0].id) || null, deviceId: r.deviceId,
           ...(tlsCa ? { tlsCa } : {}),
         });
-        process.stdout.write(`ok este equipo («${name}») está emparejado con ${server}\n`);
+        process.stdout.write(`ok this device ("${name}") is paired with ${server}\n`);
         break;
       }
       case 'share': {
@@ -375,7 +375,7 @@ async function main() {
         const wanted = argv.slice(1).filter(a => !a.startsWith('--') && a !== flag(argv, 'url'));
         require_(wanted.length, 'uso: edinot share <vault> [<vault>…] [--read-only]');
         const cfg = await hubConfig();
-        require_(cfg && cfg.token, 'no hay hub en marcha en este equipo (arráncalo con: edinot serve)');
+        require_(cfg && cfg.token, 'there is no hub running on this computer (start it with: edinot serve)');
         const vs = await withSession(async (sess) => sess.listVaults());
         const ids = [], labels = [];
         for (const w of wanted) {
@@ -390,9 +390,9 @@ async function main() {
           body: JSON.stringify({ url: flag(argv, 'url') || (info && info.publicUrl) || undefined, scope: { vaults: ids, readOnly } }),
         });
         const r = await res.json().catch(() => ({}));
-        require_(res.ok, r.error || `el hub respondió ${res.status}`);
+        require_(res.ok, r.error || `the hub answered ${res.status}`);
         process.stdout.write(`\nAcceso ${readOnly ? 'de SOLO LECTURA' : 'de lectura y escritura'} a: ${labels.join(', ')}\n`);
-        process.stdout.write('Quien use este código no podrá leer ni cambiar ningún otro vault ni administrar el servidor (sí verá sus nombres).\n');
+        process.stdout.write('Whoever uses this code cannot read or change any other vault, nor administer the server (they will see their names).\n');
         await printPairing(r);
         process.stdout.write('Para quitarle el acceso:  edinot shares   y luego   edinot devices revoke <id>\n');
         break;
@@ -400,11 +400,11 @@ async function main() {
       case 'shares': {
         let cfg;
         try { cfg = await resolveConfig(); } catch (err) { require_(false, err.message); }
-        require_(cfg && cfg.token, 'no hay sesión ni hub local');
+        require_(cfg && cfg.token, 'no session and no local hub');
         const r = await (await hubFetch(cfg.server.replace(/\/$/, '') + '/devices', { headers: { Authorization: `Bearer ${cfg.token}` } })).json();
         const shared = (r.devices || []).filter(d => d.scope);
         if (flagBool(argv, 'json')) { process.stdout.write(JSON.stringify(shared, null, 2) + '\n'); break; }
-        if (!shared.length) { process.stdout.write('ningún acceso compartido todavía (usa: edinot share <vault>)\n'); break; }
+        if (!shared.length) { process.stdout.write('no shared access yet (use: edinot share <vault>)\n'); break; }
         const vs = await withSession(async (sess) => sess.listVaults()).catch(() => []);
         const nameOf = (id) => (vs.find(v => v.id === id) || {}).name || id;
         for (const d of shared) {
@@ -417,13 +417,13 @@ async function main() {
         const sub = argv[1] || 'list';
         let cfg;
         try { cfg = await resolveConfig(); } catch (err) { require_(false, err.message); }
-        require_(cfg && cfg.token, 'no hay sesión ni hub local');
+        require_(cfg && cfg.token, 'no session and no local hub');
         const auth = { Authorization: `Bearer ${cfg.token}` };
         const base = cfg.server.replace(/\/$/, '');
         if (sub === 'list') {
           const r = await (await hubFetch(base + '/devices', { headers: auth })).json();
           if (flagBool(argv, 'json')) { process.stdout.write(JSON.stringify(r.devices || [], null, 2) + '\n'); break; }
-          if (!(r.devices || []).length) process.stdout.write('ningún equipo emparejado todavía (usa: edinot pair)\n');
+          if (!(r.devices || []).length) process.stdout.write('no device paired yet (use: edinot pair)\n');
           for (const d of r.devices || []) {
             const seen = d.lastSeenAt ? new Date(d.lastSeenAt).toISOString().replace('T', ' ').slice(0, 16) : '—';
             process.stdout.write(`${d.id}  ${d.name}  (visto: ${seen})${d.scope ? '  [compartido: ' + d.scope.vaults.join(', ') + (d.scope.readOnly ? ', solo lectura' : '') + ']' : ''}\n`);
@@ -433,7 +433,7 @@ async function main() {
           require_(id, 'uso: edinot devices revoke <id>');
           const res = await hubFetch(`${base}/devices/${encodeURIComponent(id)}`, { method: 'DELETE', headers: auth });
           const r = await res.json().catch(() => ({}));
-          require_(res.ok, r.error || `el hub respondió ${res.status}`);
+          require_(res.ok, r.error || `the hub answered ${res.status}`);
           process.stdout.write(`ok revocado: ${r.revoked}. Ya no puede sincronizar.\n`);
         } else require_(false, 'uso: edinot devices [list|revoke <id>]');
         break;
@@ -449,7 +449,7 @@ async function main() {
             prune: !flagBool(argv, 'no-prune'),
             fetchBlob: withAtt ? (sha) => api.blobFetch(cfg.server, cfg.token, sha) : null,
           });
-          process.stdout.write(`ok ${rep.notes} notas en ${outDir} (${rep.rewritten} escritas, ${rep.unchanged} sin cambios, ${rep.removed} retiradas)\n`);
+          process.stdout.write(`ok ${rep.notes} notes in ${outDir} (${rep.rewritten} written, ${rep.unchanged} unchanged, ${rep.removed} removed)\n`);
           if (withAtt) process.stdout.write(`adjuntos: ${rep.attachments} copiados${rep.attachmentsMissing.length ? `, ${rep.attachmentsMissing.length} no disponibles` : ''}\n`);
           for (const f of rep.failed.slice(0, 10)) process.stdout.write(`  error: ${f.name}: ${f.error}\n`);
           if (rep.failed.length) process.exitCode = 1;
@@ -573,17 +573,17 @@ async function main() {
         const out = {
           hubLocal: { running, url: running ? info.url : null, dir: (info && info.dir) || hubDir() },
           sync: remote
-            ? { mode: 'servidor', server: saved.server, cifrado: /^https:/i.test(saved.server) ? (saved.tlsCa ? 'certificado propio fijado' : 'https') : 'SIN CIFRAR (http)',
-                equipo: saved.deviceId || null, acceso: saved.scope ? { vaults: saved.scope.vaults, soloLectura: !!saved.scope.readOnly } : 'completo' }
-            : { mode: saved && saved.mode === 'local' ? 'carpeta local' : 'solo este equipo' },
+            ? { mode: 'server', server: saved.server, encryption: /^https:/i.test(saved.server) ? (saved.tlsCa ? 'own certificate, pinned' : 'https') : 'UNENCRYPTED (http)',
+                device: saved.deviceId || null, access: saved.scope ? { vaults: saved.scope.vaults, readOnly: !!saved.scope.readOnly } : 'full' }
+            : { mode: saved && saved.mode === 'local' ? 'local folder' : 'this device only' },
         };
         if (flagBool(argv, 'json')) { process.stdout.write(JSON.stringify(out, null, 2) + '\n'); break; }
-        process.stdout.write(`Hub local:      ${running ? `en marcha (${info.url})` : 'parado (se arranca solo al usar cualquier comando)'}\n`);
-        process.stdout.write(`Datos:          ${out.hubLocal.dir}\n`);
+        process.stdout.write(`Local hub:   ${running ? `running (${info.url})` : 'stopped (it starts by itself when you use any command)'}\n`);
+        process.stdout.write(`Data:        ${out.hubLocal.dir}\n`);
         if (remote) {
-          process.stdout.write(`Sincronización: con ${saved.server}  [${out.sync.cifrado}]\n`);
-          process.stdout.write(`Acceso:         ${saved.scope ? `compartido: ${saved.scope.vaults.join(', ')} (${saved.scope.readOnly ? 'solo lectura' : 'lectura y escritura'})` : 'completo'}\n`);
-        } else process.stdout.write('Sincronización: solo en este equipo (para otros equipos: edinot join <enlace>)\n');
+          process.stdout.write(`Sync:        with ${saved.server}  [${out.sync.encryption}]\n`);
+          process.stdout.write(`Access:      ${saved.scope ? `shared: ${saved.scope.vaults.join(', ')} (${saved.scope.readOnly ? 'read-only' : 'read and write'})` : 'full'}\n`);
+        } else process.stdout.write('Sync:        this device only (for other devices: edinot join <link>)\n');
         break;
       }
       case 'vaults': {

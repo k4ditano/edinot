@@ -1,9 +1,9 @@
 name: release
 
-# Se dispara al subir una etiqueta como v1.3.1. Compila los instaladores en Linux, Windows y macOS
-# (runners de GitHub) y los publica en una release de GitHub, que es de donde el actualizador
-# integrado de la app (electron-updater, proveedor «github») los descarga. No hace falta ningún
-# servidor ni secreto propio: solo el GITHUB_TOKEN que da Actions.
+# Triggered by pushing a tag like v1.3.1. It builds the installers on Linux, Windows and macOS
+# (GitHub-hosted runners) and publishes them to a GitHub release, which is where the app's built-in
+# updater (electron-updater, "github" provider) downloads them from. No server and no secret of our
+# own is needed: only the GITHUB_TOKEN that Actions provides.
 
 on:
   push:
@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read   # el job de publicación lo sube a «write» solo para él
+  contents: read   # the publish job raises it to "write" for itself only
 
 concurrency:
   group: release-${{ github.ref }}
@@ -67,8 +67,8 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: |
           npm run build
-          # Build only this runner's platform. electron-builder no publica: lo hace el job «publish» —
-          # así los instaladores de los tres sistemas acaban en la MISMA release.
+          # Build only this runner's platform. electron-builder does not publish: the "publish" job does —
+          # so the installers of the three systems end up in the SAME release.
           if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
             npx electron-builder --linux AppImage deb --x64 --arm64 --publish never
           elif [ "${{ matrix.os }}" = "windows-latest" ]; then
@@ -130,7 +130,7 @@ jobs:
   publish:
     name: publish GitHub release
     needs: build
-    # Aunque falle un sistema operativo, se publica lo que sí se haya compilado.
+    # Even if one operating system fails, publish what was built.
     if: ${{ !cancelled() && needs.build.result != 'cancelled' }}
     runs-on: ubuntu-latest
     permissions:
@@ -190,7 +190,7 @@ jobs:
       - name: List installers
         run: ls -la release/
 
-      # Los latest*.yml tienen que ir en la release con esos nombres: el actualizador los busca ahí.
+      # The latest*.yml files must go in the release under those names: the updater looks for them there.
       - name: Create the release and upload assets
         env:
           GH_TOKEN: ${{ github.token }}
@@ -200,7 +200,7 @@ jobs:
           files=(release/*.AppImage release/*.AppImage.blockmap release/*.deb release/edinot-hub-linux.tar.gz \
                  release/*.exe release/*.exe.blockmap release/*.dmg release/*.dmg.blockmap \
                  release/*.zip release/latest*.yml)
-          [ ${#files[@]} -gt 0 ] || { echo "no hay instaladores que publicar"; exit 1; }
+          [ ${#files[@]} -gt 0 ] || { echo "no installers to publish"; exit 1; }
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
             || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes
           gh release upload "$TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber

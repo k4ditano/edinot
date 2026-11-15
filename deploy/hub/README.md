@@ -1,127 +1,157 @@
-# Hub de Edinot en un servidor (VPS o un PC siempre encendido)
+# The Edinot hub, on a server
 
-No se instala la aplicación de escritorio: solo dos archivos de terminal, sin pantalla
-ni interfaz gráfica. Todo se maneja con comandos.
+The hub is the small process that stores your notes. Every Edinot computer runs
+one locally; to use your notes on several computers you also run one on a
+server of your own (a small VPS, or a PC that is always on) and pair your
+computers with it. Nothing here needs the desktop app, a screen or a graphical
+interface: it is two terminal files and a service.
 
-## Lo más sencillo: sin dominio, cifrado de serie
+**English** · [Español](LEEME.md)
 
-Si el hub escucha fuera del servidor (`0.0.0.0`, que es lo que hace `edinot serve` y el contenedor),
-**se cifra solo**: genera un certificado propio (carpeta `tls/` de sus datos) y sirve por TLS. No hace
-falta dominio, Caddy ni Tailscale. Solo hay que decirle con qué dirección se llegará a él:
+## Install
 
-```sh
-docker run -d --name edinot-hub --restart unless-stopped \
-  -p 17870:17870 -v edinot-hub:/data \
-  -e EDINOT_HUB_PUBLIC_URL=https://<ip-o-nombre-del-servidor>:17870 edinot-hub
-docker exec -u node edinot-hub node /app/edinot.mjs pair     # código, enlace y QR
-```
-
-**Cómo se evita que alguien se haga pasar por el servidor:** el enlace de emparejamiento
-(`edinot://pair?u=…&c=…&f=<huella>`) lleva la huella del certificado. El equipo nuevo comprueba que el
-servidor presenta justo ese certificado y desde entonces solo acepta ese. Por eso hay que usar el
-**enlace o el QR completo**: el código suelto (`ABCDE-FGHJK`) no lleva huella y el equipo se negará a
-conectar con un servidor de certificado propio. Si algún día se regenera el certificado
-(`edinot serve --new-cert`), los equipos emparejados dejan de fiarse y hay que emparejarlos otra vez.
-
-Para un proxy con HTTPS normal (Caddy, nginx) deja el hub en `127.0.0.1` (o arráncalo con `--no-tls` /
-`EDINOT_HUB_TLS=0`, que es lo que hay que poner en el contenedor si va detrás de un proxy) y la sección
-siguiente. Tailscale tampoco hace falta, pero sigue funcionando.
-
-## Qué necesitas
-
-- Un servidor Linux con **Node.js 20 o superior**.
-- Un dominio apuntando a él, para tener **HTTPS** (Caddy lo da gratis y solo).
-- Los dos archivos que salen de `npm run build`: `dist/edinot.mjs` y `dist/hub.mjs`.
-
-## Instalar (en el servidor)
+You need a Linux server with **Node.js 20 or newer**, and `systemd`.
 
 ```sh
-# desde tu equipo: copia los dos archivos y el instalador
-scp dist/edinot.mjs dist/hub.mjs deploy/hub/install.sh usuario@servidor:~/edinot-hub/
+# on your computer: copy the release package to the server
+scp edinot-hub-linux.tar.gz user@server:~
 
-# en el servidor
-cd ~/edinot-hub
-sudo sh install.sh --public-url https://hub.tu-dominio.com
+# on the server
+tar xzf edinot-hub-linux.tar.gz
+sudo sh install.sh
 ```
 
-El instalador crea el usuario `edinot`, deja los datos en `/var/lib/edinot`, instala el
-servicio `edinot-hub` y un comando `edinot` para administrarlo. El hub escucha **solo en
-127.0.0.1**: no queda expuesto hasta que pongas HTTPS delante.
+`edinot-hub-linux.tar.gz` is attached to every [release][Releases]. The
+installer creates an `edinot` user, keeps the data in `/var/lib/edinot`,
+installs the `edinot-hub` service and an `edinot` command to manage it, and
+finishes by printing a **link and a QR code** to pair your first computer.
 
-## HTTPS con Caddy
+It works out the server's public IP from its own network interface (it asks no
+outside service). If it cannot, or you want another address:
+
+```sh
+sudo sh install.sh --public-url https://203.0.113.10:17870
+```
+
+Other options: `--port 17870`, `--no-tls` (see
+[behind a reverse proxy](#behind-a-reverse-proxy)), and
+`sudo sh install.sh --uninstall` (add `--purge` to delete the data too).
+
+If your provider has a firewall of its own (OVH, Hetzner, AWS…), open the port
+(17870 by default) there as well.
+
+## It encrypts itself, with no domain
+
+When the hub listens outside the server it creates a certificate for itself
+(in the `tls/` folder of its data) and serves over TLS. You need neither a
+domain nor a reverse proxy.
+
+**How a stranger is kept from posing as your server:** the pairing link
+(`edinot://pair?u=…&c=…&f=<fingerprint>`) carries the fingerprint of that
+certificate. A new computer checks that the server presents exactly that
+certificate and, from then on, accepts only that one. So use the **whole link
+or the QR code**: the bare code (`ABCDE-FGHJK`) has no fingerprint, and the
+computer will refuse to talk to a server with a certificate of its own. If you
+ever renew the certificate (`edinot serve --new-cert`), the paired computers
+stop trusting it and have to be paired again.
+
+## Add computers
+
+```sh
+edinot pair                   # on the server: a 5-minute code, a link and a QR code
+edinot devices                # who is paired
+edinot devices revoke <id>    # remove one: it stops syncing at once
+```
+
+In the app, paste the link in **Settings → Sync**. From a terminal, on the new
+computer: `edinot join "<link>"`.
+
+A code works once. Each computer gets **its own credential**: the hub's master
+key never leaves the server, and using it over the network gets a 403.
+
+## Share only some vaults, with someone else
+
+```sh
+edinot share Work --read-only     # a code/link/QR that opens ONLY that vault, to read
+edinot share Work Projects        # read and write on those two vaults
+edinot shares                     # active shared accesses
+edinot devices revoke <id>        # remove one: it stops syncing at once
+```
+
+In the app: Settings → Sync → «Add another device» → «Only some vaults».
+
+How it works, and its limits, plainly:
+
+- **The unit is the vault.** The text of the notes lives inside its vault's
+  document, so access to a single folder or note cannot be given without
+  changing how the data is stored.
+- Whoever gets the access can neither read nor change any other vault, nor
+  administer the server (pair, list or remove computers, import). With
+  «read-only» the server discards their changes, and the CLI says so instead of
+  pretending they were saved.
+- **They do see the names of your other vaults** (the document that lists them
+  is offered read-only), not their contents.
+- **Removing someone stops future access, not the past:** what already synced
+  to their computer stays on their disk, and Edinot cannot delete it.
+- A desktop app syncs with **one** server at a time. Someone who joins with a
+  shared access receives those vaults, but their own vaults stop syncing while
+  they are joined. For a person with a server of their own, the CLI or MCP is
+  the comfortable way to use a shared access.
+
+## Behind a reverse proxy
+
+If you prefer a domain and normal HTTPS, keep the hub on `127.0.0.1` and put
+Caddy or nginx in front of it:
+
+```sh
+sudo sh install.sh --no-tls --public-url https://hub.example.com
+```
 
 ```caddy
-hub.tu-dominio.com {
+hub.example.com {
     reverse_proxy 127.0.0.1:17870
 }
 ```
 
-Caddy reenvía también los WebSockets, que es lo que usa la sincronización.
-
-## Añadir equipos
-
-```sh
-edinot pair          # en el servidor: código de 5 minutos, enlace y QR en la terminal
-edinot join ABCDE-FGHJK --server https://hub.tu-dominio.com    # en el equipo nuevo
-edinot devices       # quién está emparejado
-edinot devices revoke <id>    # cortar un equipo (deja de sincronizar al instante)
-```
-
-El código sirve una vez. El equipo nuevo recibe **su propia credencial**: la clave maestra
-del hub no sale nunca del servidor, y si alguien la intenta usar a través de la red recibe
-un 403.
-
-## Compartir solo algunos vaults (con otra persona)
-
-```sh
-edinot share Trabajo --read-only     # código/enlace/QR: acceso SOLO a ese vault, y solo para leer
-edinot share Trabajo Proyectos       # lectura y escritura en esos dos vaults
-edinot shares                        # accesos compartidos activos
-edinot devices revoke <id>           # quitar uno: deja de sincronizar al instante
-```
-
-En la app: Ajustes > Sincronización > «Añadir otro equipo» > «Solo algunos vaults».
-
-Cómo funciona y sus límites, sin adornos:
-
-- **La granularidad es el vault.** El texto de las notas vive dentro del documento de su vault, así que no
-  se puede dar acceso a una carpeta o a una nota suelta sin rehacer cómo se guardan los datos.
-- Quien recibe el acceso no puede leer ni cambiar ningún otro vault ni administrar el servidor
-  (emparejar, ver o quitar equipos, importar). Con «solo lectura» el servidor descarta sus cambios; el CLI
-  lo avisa en vez de aparentar que se guardaron.
-- **Sí ve los nombres de tus demás vaults** (el documento con la lista se le ofrece en solo lectura), no su
-  contenido.
-- **Revocar corta el acceso futuro, no lo pasado:** lo que ya se sincronizó al equipo de esa persona
-  sigue en su disco; Edinot no puede borrarlo.
-- Una app de escritorio solo sincroniza con **un** servidor a la vez. Quien se une con un acceso compartido
-  recibe esos vaults, pero sus propios vaults dejan de sincronizarse mientras esté unido. Para una persona
-  que tiene su propio servidor, lo cómodo es usar el CLI o el MCP para el acceso compartido.
-
-## En un PC tuyo en vez de un VPS
-
-Es el mismo programa: `edinot serve --host 127.0.0.1 --public-url <dirección>`. Para que
-otros equipos lleguen sin abrir puertos en el router, lo más sencillo es **Tailscale** (una
-dirección privada `http://tu-pc:17870`) o un túnel de Cloudflare.
+The proxy must forward WebSockets too, which is what sync uses.
 
 ## Docker
 
-Ver `Dockerfile` en esta carpeta. Probado el 2026-11-15 en un VPS con Docker 28: emparejar,
-escribir, leer desde otro equipo y quitar un equipo funcionan. Se construye desde una carpeta que
-tenga `dist/edinot.mjs` y `dist/hub.mjs`; el contenedor escucha en el puerto 17870 (publícalo solo
-en 127.0.0.1 y pon nginx o Caddy con HTTPS delante, que reenvíe también los WebSockets).
+Build from the repository root, after `npm ci && npm run build` (that is what
+makes `dist/edinot.mjs` and `dist/hub.mjs`, which the image copies):
 
-Para generar un código dentro del contenedor: `docker exec -u node edinot-hub node /app/edinot.mjs pair`
-(sin `-u node` el comando corre como root, que no es el dueño de los datos).
+```sh
+docker build -f deploy/hub/Dockerfile -t edinot-hub .
+docker run -d --name edinot-hub --restart unless-stopped \
+  -p 17870:17870 -v edinot-hub:/data \
+  -e EDINOT_HUB_PUBLIC_URL=https://<server-ip-or-name>:17870 edinot-hub
+docker exec -u node edinot-hub node /app/edinot.mjs pair    # code, link and QR
+```
 
-## Copias de seguridad
+Run `pair` with `-u node`: without it the command runs as root, which does not
+own the data. Behind a reverse proxy, publish the port only on `127.0.0.1` and
+add `-e EDINOT_HUB_TLS=0`.
 
-Los datos son la carpeta `/var/lib/edinot` (`docs/` y `blobs/`). El hub guarda además una
-copia diaria de cada documento que cambia durante 14 días en `backups/`, en el mismo disco:
-**haz también una copia fuera del servidor.** Para tener tus notas en Markdown legible sin
-Edinot: `edinot export /ruta/destino --attachments`.
+## On a PC of your own instead of a VPS
 
-## Lo que todavía no hace
+It is the same program: `edinot serve`. For computers outside your network to
+reach it without opening ports on your router, the easiest ways are
+[Tailscale](https://tailscale.com) or a Cloudflare tunnel.
 
-- No hay QR para escanear desde el móvil (no hay app móvil); en escritorio se pega el código.
-- No hay P2P directo entre equipos; todos sincronizan a través de este servidor.
-- `install.sh` (systemd) sigue sin probarse en un servidor real; el contenedor sí está probado.
+## Backups
+
+The data is the `/var/lib/edinot` folder (`docs/` and `blobs/`). The hub also
+keeps, for 14 days, a daily copy of every document that changes, in `backups/`
+— on the same disk, so **keep a copy off the server too.** To have your notes as
+readable Markdown without Edinot: `edinot export /path/to/folder --attachments`.
+
+## What it does not do yet
+
+- There is no phone app to scan the QR code with; on the desktop you paste the
+  link.
+- There is no direct computer-to-computer sync: every computer syncs through
+  this server.
+- The installer has been tried on Ubuntu 25.04 with systemd, and the container
+  with Docker 28. Other distributions should work but have not been tried.
+
+[Releases]: https://github.com/k4ditano/edinot/releases

@@ -81,7 +81,7 @@ export const SETTINGS_STRINGS = {
     'st.sync.needLink': 'No se pudo conectar. Si el servidor usa cifrado con certificado propio, pega el ENLACE completo (edinot://…): lleva la huella que permite comprobarlo.',
     'st.grp.server': 'Montar tu propio servidor',
     'st.sync.srv.intro': 'Para usar tus notas en varios equipos necesitas un servidor tuyo: un VPS barato o un PC que esté siempre encendido (Linux con Node.js 20 o superior). Edinot no tiene servidores ni cuentas propias: tus datos solo pasan por el tuyo.',
-    'st.sync.srv.s1': 'En la página de descargas de Edinot baja «Edinot Hub» (edinot-hub-linux.tar.gz), súbelo al servidor y descomprímelo.',
+    'st.sync.srv.s1': 'En las releases de Edinot en GitHub baja «edinot-hub-linux.tar.gz», súbelo al servidor y descomprímelo.',
     'st.sync.srv.s2': 'En el servidor ejecuta:',
     'st.sync.srv.s3': 'Te mostrará un enlace y un QR. Pega el enlace aquí, en «Conectar con un servidor», y repite en cada equipo (cada vez con un código nuevo: «edinot pair» en el servidor).',
     'st.sync.srv.note': 'Todo va cifrado y solo se acepta tu servidor. Si tu proveedor tiene cortafuegos propio, abre el puerto 17870.',
@@ -123,12 +123,6 @@ export const SETTINGS_STRINGS = {
     'st.row.profile.plan.h': 'Lo que incluye tu suscripción.',
     'st.row.profile.storage': 'Almacenamiento de adjuntos',
     'st.row.profile.storage.h': 'Espacio usado en el servidor.',
-    'st.profile.planLoggedOut': 'Sin cuenta: todo se guarda en este dispositivo. Inicia sesión para ver tu plan.',
-    'st.profile.planName': 'Plan {plan}',
-    'st.profile.managePlan': 'Gestionar plan',
-    'st.role.owner': 'propietario',
-    'st.role.editor': 'editor',
-    'st.role.viewer': 'lector',
 
     // Espacios y equipo
     'st.row.workspaces.owned': 'Tus espacios',
@@ -139,13 +133,6 @@ export const SETTINGS_STRINGS = {
     'st.row.workspaces.members.h': 'Usa el icono de persona de un espacio para ver sus miembros, cambiar roles, invitar o reenviar invitaciones pendientes.',
     'st.row.workspaces.audit': 'Registro de auditoría',
     'st.row.workspaces.audit.h': 'El icono de historial de cada espacio propio abre quién hizo qué y cuándo.',
-    'st.ws.owned': 'Tus espacios ({n}/{cap})',
-    'st.ws.shared': 'Compartidos contigo ({n})',
-    'st.ws.current': 'Actual',
-    'st.ws.switchTo': 'Cambiar a este espacio',
-    'st.ws.roleOf': 'Rol de {email}',
-    'st.ws.inviteRole': 'Rol de la invitación',
-    'st.ws.needLogin': 'Inicia sesión con un plan con sincronización para crear espacios e invitar a tu equipo.',
 
     // Apariencia
     'st.row.appearance.theme': 'Tema',
@@ -264,8 +251,6 @@ export const SETTINGS_STRINGS = {
     'st.row.sync.cacheMax.h': 'Espacio en disco para adjuntos sin conexión.',
     'st.row.sync.cacheStats': 'Caché de adjuntos',
     'st.row.sync.cacheStats.h': 'Lo que ocupa ahora en este equipo.',
-    'st.sync.statusHelp': 'Servidor {server} · espacio «{ws}».',
-    'st.sync.loggedOut': 'Sin cuenta, las notas solo viven en este dispositivo.',
     'st.sync.local': 'Solo local',
 
     // Calendario
@@ -305,9 +290,6 @@ export const SETTINGS_STRINGS = {
     'st.row.agents.recallIndex': 'Índice semántico',
     'st.row.agents.recallIndex.h': 'Notas y fragmentos indexados en este dispositivo.',
     'st.agents.semantic': 'Búsqueda semántica',
-    'st.agent.online': 'en línea',
-    'st.agent.offline': 'desconectado',
-    'st.agent.local': 'local',
 
     // Integraciones
     'st.row.integrations.mcp': 'Configurar un cliente de IA',
@@ -423,7 +405,7 @@ export const SETTINGS_STRINGS = {
     'st.sync.needLink': 'Could not connect. If the server uses encryption with its own certificate, paste the full LINK (edinot://…): it carries the fingerprint that lets us verify it.',
     'st.grp.server': 'Set up your own server',
     'st.sync.srv.intro': 'To use your notes on several devices you need a server of your own: a cheap VPS or an always-on PC (Linux with Node.js 20 or newer). Edinot has no servers or accounts of its own: your data only goes through yours.',
-    'st.sync.srv.s1': 'On the Edinot downloads page get “Edinot Hub” (edinot-hub-linux.tar.gz), upload it to the server and unpack it.',
+    'st.sync.srv.s1': 'From the Edinot releases on GitHub get “edinot-hub-linux.tar.gz”, upload it to the server and unpack it.',
     'st.sync.srv.s2': 'On the server run:',
     'st.sync.srv.s3': 'It prints a link and a QR code. Paste the link here, in “Connect to a server”, and repeat on each device (with a fresh code each time: “edinot pair” on the server).',
     'st.sync.srv.note': 'Everything is encrypted and only your server is accepted. If your provider has its own firewall, open port 17870.',
@@ -463,12 +445,6 @@ export const SETTINGS_STRINGS = {
     'st.row.profile.plan.h': 'What your subscription includes.',
     'st.row.profile.storage': 'Attachment storage',
     'st.row.profile.storage.h': 'Space used on the server.',
-    'st.profile.planLoggedOut': 'No account: everything is stored on this device. Sign in to see your plan.',
-    'st.profile.planName': '{plan} plan',
-    'st.profile.managePlan': 'Manage plan',
-    'st.role.owner': 'owner',
-    'st.role.editor': 'editor',
-    'st.role.viewer': 'viewer',
 
     'st.row.workspaces.owned': 'Your workspaces',
     'st.row.workspaces.owned.h': 'Click one to switch to it. Create workspaces to separate projects or teams.',
@@ -478,13 +454,6 @@ export const SETTINGS_STRINGS = {
     'st.row.workspaces.members.h': 'Use a workspace’s person icon to see its members, change roles, invite or resend pending invitations.',
     'st.row.workspaces.audit': 'Audit log',
     'st.row.workspaces.audit.h': 'The history icon on each workspace you own shows who did what and when.',
-    'st.ws.owned': 'Your workspaces ({n}/{cap})',
-    'st.ws.shared': 'Shared with you ({n})',
-    'st.ws.current': 'Current',
-    'st.ws.switchTo': 'Switch to this workspace',
-    'st.ws.roleOf': 'Role of {email}',
-    'st.ws.inviteRole': 'Invitation role',
-    'st.ws.needLogin': 'Sign in with a plan that includes sync to create workspaces and invite your team.',
 
     'st.row.appearance.theme': 'Theme',
     'st.row.appearance.theme.h': 'Light, dark or whatever the system uses.',
@@ -597,8 +566,6 @@ export const SETTINGS_STRINGS = {
     'st.row.sync.cacheMax.h': 'Disk space for offline attachments.',
     'st.row.sync.cacheStats': 'Attachment cache',
     'st.row.sync.cacheStats.h': 'What it takes on this device right now.',
-    'st.sync.statusHelp': 'Server {server} · workspace “{ws}”.',
-    'st.sync.loggedOut': 'Without an account, notes only live on this device.',
     'st.sync.local': 'Local only',
 
     'st.row.calendar.client': 'Google OAuth client',
@@ -636,9 +603,6 @@ export const SETTINGS_STRINGS = {
     'st.row.agents.recallIndex': 'Semantic index',
     'st.row.agents.recallIndex.h': 'Notes and chunks indexed on this device.',
     'st.agents.semantic': 'Semantic search',
-    'st.agent.online': 'online',
-    'st.agent.offline': 'offline',
-    'st.agent.local': 'local',
 
     'st.row.integrations.mcp': 'Set up an AI client',
     'st.row.integrations.mcp.h': 'Add Edinot as an MCP server in one click.',

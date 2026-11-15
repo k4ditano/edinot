@@ -14,6 +14,6 @@ try {
   process.on('SIGTERM', bye);
 } catch (err) {
   if (err && err.code === 'ALREADY_RUNNING') { console.error('[edinot-hub] ' + err.message); process.exit(0); }
-  console.error('[edinot-hub] no se pudo iniciar:', err && err.stack || err);
+  console.error('[edinot-hub] could not start:', err && err.stack || err);
   process.exit(1);
 }

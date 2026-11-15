@@ -1,9 +1,28 @@
 {
   "name": "edinot",
   "version": "1.3.2",
-  "description": "Edinot — cross-platform Markdown editor (Electron)",
+  "description": "Edinot — a local-first note app (Markdown, canvases, databases, calendar) with its own hub and encrypted sync",
+  "keywords": [
+    "notes",
+    "markdown",
+    "local-first",
+    "offline-first",
+    "electron",
+    "yjs",
+    "canvas",
+    "self-hosted",
+    "mcp"
+  ],
+  "homepage": "https://github.com/k4ditano/edinot#readme",
+  "bugs": {
+    "url": "https://github.com/k4ditano/edinot/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/k4ditano/edinot.git"
+  },
   "main": "electron/main.cjs",
-  "author": "edinot",
+  "author": "k4ditano",
   "license": "BSD-3-Clause",
   "scripts": {
     "build": "node build/build.mjs",

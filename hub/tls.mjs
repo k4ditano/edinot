@@ -62,12 +62,12 @@ export function probePeerCert(host, port, timeoutMs = 8000) {
       host, port: Number(port), rejectUnauthorized: false,
       servername: /^[\d.]+$|:/.test(host) ? undefined : host,
     });
-    const timer = setTimeout(() => { sock.destroy(); reject(new Error('el servidor no responde')); }, timeoutMs);
+    const timer = setTimeout(() => { sock.destroy(); reject(new Error('the server does not respond')); }, timeoutMs);
     sock.once('secureConnect', () => {
       clearTimeout(timer);
       const c = sock.getPeerCertificate(true);
       sock.end();
-      if (!c || !c.raw) return reject(new Error('el servidor no presentó certificado'));
+      if (!c || !c.raw) return reject(new Error('the server presented no certificate'));
       resolve({ pem: derToPem(c.raw), fp: fingerprintOfDer(c.raw) });
     });
     sock.once('error', (e) => { clearTimeout(timer); reject(e); });
@@ -77,10 +77,10 @@ export function probePeerCert(host, port, timeoutMs = 8000) {
 /** Empareja la huella del enlace con el servidor: devuelve el certificado a fijar o lanza error. */
 export async function pinFromLink(serverUrl, expectedFp) {
   const u = new URL(serverUrl);
-  if (u.protocol !== 'https:') throw new Error('la dirección no es https');
+  if (u.protocol !== 'https:') throw new Error('the address is not https');
   const peer = await probePeerCert(u.hostname.replace(/^\[|\]$/g, ''), u.port || 443);
   if (!sameFingerprint(peer.fp, expectedFp)) {
-    throw new Error('la huella del servidor NO coincide con la del enlace: no te conectes (puede haber alguien en medio)');
+    throw new Error('the server\'s fingerprint does NOT match the one in the link: do not connect (someone may be in the middle)');
   }
   return peer.pem;
 }

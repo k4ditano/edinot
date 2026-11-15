@@ -43,7 +43,7 @@ function verifyJwt(secret, token) {
   if (parts.length !== 3) throw new Error('token mal formado');
   const good = createHmac('sha256', secret).update(parts[0] + '.' + parts[1]).digest();
   const given = Buffer.from(parts[2], 'base64url');
-  if (good.length !== given.length || !timingSafeEqual(good, given)) throw new Error('firma no válida');
+  if (good.length !== given.length || !timingSafeEqual(good, given)) throw new Error('invalid signature');
   const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
   if (typeof payload.exp !== 'number' || payload.exp * 1000 < Date.now()) throw new Error('token caducado');
   return payload;
@@ -101,7 +101,7 @@ const DOC_RX = /^ws:(\d+)(?::vault:([A-Za-z0-9_-]+)(?::note:([A-Za-z0-9_-]+))?)?
 
 // ── Emparejamiento y dispositivos ───────────────────────────────────────────
 const PAIR_TTL_MS = 5 * 60 * 1000;
-const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // sin 0/O/1/I/L: se teclea sin equivocarse
+const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // no 0/O/1/I/L: easy to type without mistakes
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1', 'localhost']);
 
 function newCode() {
@@ -161,12 +161,12 @@ function acquireLock(dir) {
       // (en un contenedor el pid es siempre 1): está muerto, se retoma.
       const mine = owner === process.pid && !heldHere.has(file);
       if (owner && !mine && pidAlive(owner)) {
-        throw Object.assign(new Error(`ya hay un hub en marcha (pid ${owner})`), { code: 'ALREADY_RUNNING', info: readHubInfo(dir) });
+        throw Object.assign(new Error(`a hub is already running (pid ${owner})`), { code: 'ALREADY_RUNNING', info: readHubInfo(dir) });
       }
       try { unlinkSync(file); } catch {}
     }
   }
-  throw Object.assign(new Error('no se pudo tomar el candado del hub'), { code: 'LOCK_FAILED' });
+  throw Object.assign(new Error('could not take the hub lock'), { code: 'LOCK_FAILED' });
 }
 
 // ── Servidor ────────────────────────────────────────────────────────────────
@@ -216,10 +216,10 @@ async function startLocked({ dir, port, host, publicUrl, extraHosts, tls, renewC
   let tlsPort = 0;
   if (tlsOn) {
     tlsPort = port;
-    if (tlsPort !== 0 && !(await portFree(tlsPort, host))) throw Object.assign(new Error(`el puerto ${tlsPort} ya está en uso`), { code: 'PORT_BUSY' });
+    if (tlsPort !== 0 && !(await portFree(tlsPort, host))) throw Object.assign(new Error(`port ${tlsPort} is already in use`), { code: 'PORT_BUSY' });
     realPort = await freePort(0);
   } else if (serving && port !== 0) {
-    if (!(await portFree(port, host))) throw Object.assign(new Error(`el puerto ${port} ya está en uso`), { code: 'PORT_BUSY' });
+    if (!(await portFree(port, host))) throw Object.assign(new Error(`port ${port} is already in use`), { code: 'PORT_BUSY' });
     realPort = port;
   } else {
     realPort = await freePort(port);
@@ -236,7 +236,7 @@ async function startLocked({ dir, port, host, publicUrl, extraHosts, tls, renewC
       const u = new URL(publicUrl);
       allowedHosts.add(u.host.toLowerCase());                       // con o sin puerto, como lo mande el cliente
       if (u.port === '' ) allowedHosts.add(u.hostname.toLowerCase());
-    } catch { throw new Error(`EDINOT_HUB_PUBLIC_URL no es una dirección válida: ${publicUrl}`); }
+    } catch { throw new Error(`EDINOT_HUB_PUBLIC_URL is not a valid address: ${publicUrl}`); }
   }
   for (const h of String(extraHosts || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean)) allowedHosts.add(h);
   const devices = loadDevices(dir);
@@ -252,7 +252,7 @@ async function startLocked({ dir, port, host, publicUrl, extraHosts, tls, renewC
   // Crea un código de emparejamiento (de un solo uso). Lo usan POST /pair/start y `edinot serve`.
   const createPairing = (baseUrl = null, scope = null) => {
     for (const [k, v] of pending) if (v.expiresAt < Date.now()) pending.delete(k);
-    if (pending.size >= 5) return { error: 'ya hay varios códigos activos; espera a que caduquen' };
+    if (pending.size >= 5) return { error: 'several codes are already active; wait for them to expire' };
     const code = newCode();
     const expiresAt = Date.now() + pairTtlMs;
     pending.set(hashCode(code), { expiresAt, scope: scope || null });
@@ -282,7 +282,7 @@ async function startLocked({ dir, port, host, publicUrl, extraHosts, tls, renewC
     const claims = verifyJwt(secret.jwtSecret, token);
     if (claims.dev) {
       const d = devices.list.find(x => x.id === claims.dev);
-      if (!d) throw new Error('dispositivo revocado');
+      if (!d) throw new Error('device revoked');
       claims.scope = d.scope || null;
       const now = Date.now();
       if (now - (d.lastSeenAt || 0) > 60_000 && now - lastTouch > 5_000) {
@@ -306,13 +306,13 @@ async function startLocked({ dir, port, host, publicUrl, extraHosts, tls, renewC
   };
   const readJson = (req, limit = 1024 * 1024) => new Promise((resolve, reject) => {
     const chunks = []; let n = 0;
-    req.on('data', (c) => { n += c.length; if (n > limit) { reject(new Error('cuerpo demasiado grande')); req.destroy(); } else chunks.push(c); });
+    req.on('data', (c) => { n += c.length; if (n > limit) { reject(new Error('body too large')); req.destroy(); } else chunks.push(c); });
     req.on('end', () => { try { resolve(chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}); } catch { resolve({}); } });
     req.on('error', reject);
   });
   const readBuffer = (req, limit = 512 * MB) => new Promise((resolve, reject) => {
     const chunks = []; let n = 0;
-    req.on('data', (c) => { n += c.length; if (n > limit) { reject(new Error('cuerpo demasiado grande')); req.destroy(); } else chunks.push(c); });
+    req.on('data', (c) => { n += c.length; if (n > limit) { reject(new Error('body too large')); req.destroy(); } else chunks.push(c); });
     req.on('end', () => resolve(Buffer.concat(chunks)));
     req.on('error', reject);
   });
@@ -320,7 +320,7 @@ async function startLocked({ dir, port, host, publicUrl, extraHosts, tls, renewC
     const h = String(req.headers.authorization || '');
     return h.startsWith('Bearer ') ? h.slice(7) : (url.searchParams.get('t') || url.searchParams.get('token') || '');
   };
-  const notHere = (res) => send(res, 501, { error: 'No disponible en el hub local (solo hay una persona y no hay enlaces públicos).', code: 'local_hub' });
+  const notHere = (res) => send(res, 501, { error: 'Not available on the local hub (there is only one person and no public links).', code: 'local_hub' });
 
   async function handleHttp({ request: req, response: res }) {
     const url = new URL(req.url, 'http://hub.local');
@@ -328,14 +328,14 @@ async function startLocked({ dir, port, host, publicUrl, extraHosts, tls, renewC
     const method = req.method;
     let m;
 
-    if (!allowedHosts.has(String(req.headers.host || '').toLowerCase())) return send(res, 421, { error: 'host no permitido' });
+    if (!allowedHosts.has(String(req.headers.host || '').toLowerCase())) return send(res, 421, { error: 'host not allowed' });
     if (method === 'OPTIONS') { cors(res); res.statusCode = 204; res.end(); return; }
     if (p === '/healthz') return send(res, 200, { ok: true, hub: true, version: HUB_VERSION, pid: process.pid });
 
     if (method === 'POST' && p === '/auth/login') {
-      if (!isDirectLocal(req)) return send(res, 403, { error: 'la clave solo sirve desde el propio equipo del hub; empareja este dispositivo con un código', code: 'pair_required' });
+      if (!isDirectLocal(req)) return send(res, 403, { error: 'the key only works from the hub\'s own computer; pair this device with a code', code: 'pair_required' });
       const ip = clientIp(req);
-      if (tooMany(ip)) return send(res, 429, { error: 'demasiados intentos, espera un minuto' });
+      if (tooMany(ip)) return send(res, 429, { error: 'too many attempts, wait a minute' });
       const body = await readJson(req);
       if (!body || !body.password || !sameSecret(body.password, secret.key)) {
         failed(ip);
@@ -347,15 +347,15 @@ async function startLocked({ dir, port, host, publicUrl, extraHosts, tls, renewC
     // Canjear un código de emparejamiento: único endpoint sin token, con límite de intentos.
     if (method === 'POST' && p === '/pair/redeem') {
       const ip = clientIp(req);
-      if (tooMany(ip, 10)) return send(res, 429, { error: 'demasiados intentos, espera un minuto' });
+      if (tooMany(ip, 10)) return send(res, 429, { error: 'too many attempts, wait a minute' });
       const body = await readJson(req);
       const code = normalizeCode(body && body.code);
       const h = code.length === 10 ? hashCode(code) : null;
       const entry = h && pending.get(h);
-      if (!entry) { failed(ip); return send(res, 401, { error: 'código no válido', code: 'bad_code' }); }
+      if (!entry) { failed(ip); return send(res, 401, { error: 'invalid code', code: 'bad_code' }); }
       pending.delete(h);                                        // un solo uso, también si caducó
-      if (entry.expiresAt < Date.now()) return send(res, 410, { error: 'el código ha caducado; genera otro', code: 'expired' });
-      const name = String((body && body.name) || '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 60) || 'dispositivo sin nombre';
+      if (entry.expiresAt < Date.now()) return send(res, 410, { error: 'the code has expired; generate another', code: 'expired' });
+      const name = String((body && body.name) || '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 60) || 'unnamed device';
       const device = { id: randomBytes(6).toString('hex'), name, createdAt: Date.now(), lastSeenAt: Date.now(), ...(entry.scope ? { scope: entry.scope } : {}) };
       devices.list.push(device);
       saveDevices(dir, devices);
@@ -377,7 +377,7 @@ async function startLocked({ dir, port, host, publicUrl, extraHosts, tls, renewC
       const ok = p === '/auth/me' || (p === '/workspaces' && method === 'GET') || p.startsWith('/me/')
         || /^\/workspaces\/\d+\/(members|grants\/me|snapshots)$/.test(p)
         || (p.startsWith('/blobs') && (readish || p === '/blobs/meta' || p === '/blobs/text' || (!claims.scope.readOnly && method === 'POST' && p === '/blobs')));
-      if (!ok) return send(res, 403, { error: 'sin permiso: esta credencial es de un acceso compartido', code: 'scoped' });
+      if (!ok) return send(res, 403, { error: 'not allowed: this credential belongs to a shared access', code: 'scoped' });
     }
 
     // Crear un código para emparejar otro equipo.
@@ -386,7 +386,7 @@ async function startLocked({ dir, port, host, publicUrl, extraHosts, tls, renewC
       let scope = null;
       if (body && body.scope) {
         const vs = Array.isArray(body.scope.vaults) ? body.scope.vaults.map(String) : [];
-        if (!vs.length || vs.length > 50 || !vs.every(v => /^[A-Za-z0-9_-]{1,64}$/.test(v))) return send(res, 400, { error: 'alcance no válido: indica 1 a 50 ids de vault' });
+        if (!vs.length || vs.length > 50 || !vs.every(v => /^[A-Za-z0-9_-]{1,64}$/.test(v))) return send(res, 400, { error: 'invalid scope: give 1 to 50 vault ids' });
         scope = { vaults: [...new Set(vs)], readOnly: !!body.scope.readOnly };
       }
       const r = createPairing(body && body.url, scope);
@@ -398,7 +398,7 @@ async function startLocked({ dir, port, host, publicUrl, extraHosts, tls, renewC
     m = p.match(/^\/devices\/([a-f0-9]{12})$/);
     if (m && method === 'DELETE') {
       const i = devices.list.findIndex(d => d.id === m[1]);
-      if (i < 0) return send(res, 404, { error: 'dispositivo no encontrado' });
+      if (i < 0) return send(res, 404, { error: 'device not found' });
       const [gone] = devices.list.splice(i, 1);
       saveDevices(dir, devices);
       // Corta sus conexiones abiertas: los demás dispositivos se reconectan solos; el revocado ya no pasa.
@@ -414,7 +414,7 @@ async function startLocked({ dir, port, host, publicUrl, extraHosts, tls, renewC
       if (method === 'POST') {
         const body = await readJson(req);
         const name = String((body && body.name) || '').trim();
-        if (!/^[a-zA-Z0-9_-]{1,40}$/.test(name)) return send(res, 400, { error: 'nombre no válido (a-z, 0-9, _ -, máx. 40)' });
+        if (!/^[a-zA-Z0-9_-]{1,40}$/.test(name)) return send(res, 400, { error: 'invalid name (a-z, 0-9, _ -, max 40)' });
         if (workspaces.list.some(w => w.name === name)) return send(res, 409, { error: 'workspace already exists' });
         const w = { id: workspaces.nextId++, name, createdAt: Date.now() };
         workspaces.list.push(w);
@@ -479,7 +479,7 @@ async function startLocked({ dir, port, host, publicUrl, extraHosts, tls, renewC
     // texto desde el vault (sembrar y luego aplicar el estado real duplicaría el contenido).
     if (p === '/hub/docs') {
       const name = url.searchParams.get('name') || '';
-      if (!DOC_RX.test(name)) return send(res, 400, { error: 'nombre de documento no válido' });
+      if (!DOC_RX.test(name)) return send(res, 400, { error: 'invalid document name' });
       const wsId = Number(DOC_RX.exec(name)[1]);
       if (!findWs(wsId)) return send(res, 404, { error: 'workspace not found' });
       if (method === 'GET') {
@@ -492,7 +492,7 @@ async function startLocked({ dir, port, host, publicUrl, extraHosts, tls, renewC
       }
       if (method === 'POST') {
         const update = await readBuffer(req);
-        if (!update.length) return send(res, 400, { error: 'estado vacío' });
+        if (!update.length) return send(res, 400, { error: 'empty state' });
         const existed = docs.has(name);
         const isNote = /:note:/.test(name);
         if (existed && isNote && url.searchParams.get('merge') !== '1') {
@@ -513,7 +513,7 @@ async function startLocked({ dir, port, host, publicUrl, extraHosts, tls, renewC
       if (req.headers['x-edinot-filename']) { try { filename = decodeURIComponent(String(req.headers['x-edinot-filename'])).slice(0, 255); } catch {} }
       const r = await blobs.putStream(req, { mime, filename, maxBytes: LIMITS.maxFileSize });
       if (r.error === 'empty') return send(res, 400, { error: 'empty upload' });
-      if (r.error) return send(res, 413, { error: 'archivo demasiado grande', code: 'file_too_large' });
+      if (r.error) return send(res, 413, { error: 'file too large', code: 'file_too_large' });
       return send(res, 201, { ok: true, id: r.id, mime: r.mime, size: r.size, filename: r.filename, dedup: r.dedup, quotaUsed: 0, quotaLimit: LIMITS.storageBytes });
     }
     if (method === 'POST' && p === '/blobs/meta') {
@@ -584,14 +584,14 @@ async function startLocked({ dir, port, host, publicUrl, extraHosts, tls, renewC
     async onRequest(payload) {
       try { await handleHttp(payload); }
       catch (err) {
-        if (!payload.response.headersSent) send(payload.response, 500, { error: 'error interno del hub: ' + (err && err.message) });
+        if (!payload.response.headersSent) send(payload.response, 500, { error: 'internal hub error: ' + (err && err.message) });
       }
       throw null; // ya respondido: que Hocuspocus no escriba su 200 por defecto
     },
 
     async onAuthenticate({ token, documentName, requestHeaders, connection }) {
       const host = String((requestHeaders && requestHeaders.host) || '').toLowerCase();
-      if (host && !allowedHosts.has(host)) throw new Error('host no permitido');
+      if (host && !allowedHosts.has(host)) throw new Error('host not allowed');
       if (!token) throw new Error('Token required');
       let claims;
       try { claims = authorize(token); } catch (err) { throw new Error('Invalid token: ' + err.message); }
@@ -601,7 +601,7 @@ async function startLocked({ dir, port, host, publicUrl, extraHosts, tls, renewC
       // alcance. El documento «shell» del workspace (lista de vaults) solo se ofrece en lectura.
       if (claims.scope) {
         if (m[2]) {
-          if (!claims.scope.vaults.includes(m[2])) throw new Error('sin acceso a este vault');
+          if (!claims.scope.vaults.includes(m[2])) throw new Error('no access to this vault');
           if (claims.scope.readOnly && connection) connection.readOnly = true;
         } else if (connection) connection.readOnly = true;
       }

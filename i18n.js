@@ -2666,6 +2666,11 @@ function detectInitial() {
     const stored = ySettings.get('lang');
     if (SUPPORTED.includes(stored)) return stored;
   } catch {}
+  // Sin elección guardada: el idioma del sistema (español si es español; inglés en cualquier otro caso).
+  try {
+    const nav = String((typeof navigator !== 'undefined' && navigator.language) || '').toLowerCase();
+    if (nav && !nav.startsWith('es')) return 'en';
+  } catch {}
   return 'es';
 }
 

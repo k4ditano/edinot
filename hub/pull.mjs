@@ -46,7 +46,7 @@ async function remoteFetch(url, init = {}, { timeoutMs = 30000, retries = 8 } = 
         const wait = Math.min(120, Number(res.headers.get('retry-after')) || 30);
         try { await res.arrayBuffer(); } catch {}
         await sleep(wait * 1000 + Math.floor(Math.random() * 1500));
-        lastErr = new Error('HTTP 429 (límite de peticiones)');
+        lastErr = new Error('HTTP 429 (rate limit)');
         continue;
       }
       if (res.status >= 500 && attempt < retries) { try { await res.arrayBuffer(); } catch {} await sleep(500 * (attempt + 1)); lastErr = new Error(`HTTP ${res.status}`); continue; }
@@ -95,16 +95,16 @@ function openDoc({ server, token, name, idleMs = 45000, hardMs = 300000 }) {
     const arm = () => {
       if (done) return;
       clearTimeout(idle);
-      idle = setTimeout(() => finish(false, new Error(`sin datos durante ${idleMs / 1000} s: ${name}`)), idleMs);
+      idle = setTimeout(() => finish(false, new Error(`no data for ${idleMs / 1000} s: ${name}`)), idleMs);
     };
-    const hard = setTimeout(() => finish(false, new Error(`plazo máximo agotado: ${name}`)), hardMs);
+    const hard = setTimeout(() => finish(false, new Error(`deadline exceeded: ${name}`)), hardMs);
     arm();
     provider.on('message', arm);
     provider.on('synced', () => finish(true));
-    provider.on('authenticationFailed', ({ reason } = {}) => finish(false, new Error(`autenticación rechazada (${name}): ${reason || ''}`)));
+    provider.on('authenticationFailed', ({ reason } = {}) => finish(false, new Error(`authentication rejected (${name}): ${reason || ''}`)));
     provider.on('close', ({ event } = {}) => {
       const code = (event && event.code) || 0;
-      if (code >= 4400 && code <= 4599) finish(false, new Error(`conexión cerrada (${name}): código ${code}`));
+      if (code >= 4400 && code <= 4599) finish(false, new Error(`connection closed (${name}): code ${code}`));
     });
   });
   const close = () => { try { provider.destroy(); } catch {} try { doc.destroy(); } catch {} };
@@ -154,7 +154,7 @@ export async function pullWorkspace({ remote, hub, dryRun = false, concurrency =
     list = (await getJson(remote.server, `/workspaces/${remote.workspaceId}/docs`, remote.token)).docs || [];
   } catch (err) {
     if (err.status === 404 || err.status === 501) {
-      throw new Error('El servidor no ofrece la lista de documentos (GET /workspaces/:id/docs). Actualiza el servidor y vuelve a intentarlo.');
+      throw new Error('The server does not offer the document list (GET /workspaces/:id/docs). Update the server and try again.');
     }
     throw err;
   }
@@ -186,7 +186,7 @@ export async function pullWorkspace({ remote, hub, dryRun = false, concurrency =
           onProgress({ kind: 'doc-skipped', name: d.name });
           return;
         }
-        if (!res.ok) throw new Error(`el hub respondió ${res.status}`);
+        if (!res.ok) throw new Error(`the hub answered ${res.status}`);
       }
       report.docs++; report.bytes += state.length;
       onProgress({ kind: 'doc', name: d.name, index: i + 1, total: list.length, bytes: state.length });
@@ -230,7 +230,7 @@ export async function pullWorkspace({ remote, hub, dryRun = false, concurrency =
             },
           });
           const j = await up.json().catch(() => ({}));
-          if (!up.ok || j.id !== sha) throw new Error(`el hub no guardó el adjunto (${up.status})`);
+          if (!up.ok || j.id !== sha) throw new Error(`the hub did not store the attachment (${up.status})`);
         }
         report.blobs.copied++;
         onProgress({ kind: 'blob', sha, index: i + 1, total: todo.length });

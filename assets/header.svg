@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="750" height="300" viewBox="0 0 750 300">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#121d16"/>
+      <stop offset="0.6" stop-color="#18281e"/>
+      <stop offset="1" stop-color="#21362a"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.32" r="0.55">
+      <stop offset="0" stop-color="#b6c98a" stop-opacity="0.2"/>
+      <stop offset="1" stop-color="#b6c98a" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="badge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#9db878"/>
+      <stop offset="1" stop-color="#6f8f50"/>
+    </linearGradient>
+  </defs>
+  <rect width="750" height="300" rx="28" fill="url(#bg)"/>
+  <rect width="750" height="300" rx="28" fill="url(#glow)"/>
+  <!-- pages, stacked -->
+  <rect x="70" y="228" width="610" height="90" rx="14" fill="#c1cc97" fill-opacity="0.06"/>
+  <rect x="104" y="248" width="542" height="90" rx="14" fill="#c1cc97" fill-opacity="0.08"/>
+  <rect x="138" y="268" width="474" height="90" rx="14" fill="#c1cc97" fill-opacity="0.11"/>
+  <!-- the e, on a page with its corner turned -->
+  <g>
+    <rect x="337" y="46" width="76" height="76" rx="20" fill="url(#badge)"/>
+    <path d="M391 46 H393 A20 20 0 0 1 413 66 V68 Z" fill="#f3ebd2" fill-opacity="0.95"/>
+    <path d="M391 46 L413 68 L395 70 Q391 70 391 66 Z" fill="#dfd5b3"/>
+    <path d="M356 86 H394 A19 19 0 1 0 388 101" fill="none" stroke="#f3ebd2" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <text x="375" y="178" text-anchor="middle" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="64" font-weight="700" fill="#f3ebd2" letter-spacing="-1">Edinot</text>
+  <text x="375" y="214" text-anchor="middle" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="17" fill="#c1cc97" fill-opacity="0.92">notes that stay on your computer, and sync only with your own server</text>
+</svg>

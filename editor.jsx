@@ -1670,7 +1670,7 @@ Cualquier tabla es una pequeña base de datos: arriba tienes las vistas **Tabla 
 
 ## Adjuntos
 
-Arrastra cualquier archivo a la nota: imágenes/vídeos/audio se previsualizan; PDF, Word, Excel y código se enlazan con icono. Requiere sync (plan Free → solo local). Caché offline configurable en Ajustes → General.
+Arrastra cualquier archivo a la nota: imágenes/vídeos/audio se previsualizan; PDF, Word, Excel y código se enlazan con icono. Se guardan en tu equipo y te acompañan si sincronizas. Caché offline configurable en Ajustes → Sincronización.
 
 ## Plantillas
 
@@ -1678,11 +1678,11 @@ Carpeta "Plantillas" por vault. Variables \`{{fecha}}\`, \`{{hora}}\`, \`{{curso
 
 ## Sync (opcional)
 
-Crea cuenta en Ajustes → Sync. El plan Free funciona sin sync (todo local). Los planes superiores sincronizan entre dispositivos en tiempo real (Yjs CRDT) y comparten workspaces.
+Tus notas viven en tu equipo y no hay cuentas ni planes. Para usarlas en otros ordenadores, conéctalas a un servidor tuyo: Ajustes → Sincronización explica cómo montarlo y cómo emparejar cada equipo con un enlace. Todo va cifrado.
 
 ## MCP — IAs con tus notas
 
-Ajustes → MCP conecta Edinot con Claude Desktop, Codex, Claude Code o Cursor. La IA puede leer y escribir tus notas en vivo.
+Ajustes → Conexiones conecta Edinot con Claude Desktop, Codex, Claude Code o Cursor. La IA puede leer y escribir tus notas en vivo. Edinot no incluye IA propia.
 
 ## Vídeos de YouTube
 
@@ -1775,7 +1775,7 @@ Every table is a small database: on top you get the **Table · Board · Calendar
 
 ## Attachments
 
-Drag any file into a note: images/videos/audio preview inline; PDF, Word, Excel and code are linked with an icon. Requires sync (Free plan → local only). Offline cache configurable under Settings → General.
+Drag any file into a note: images/videos/audio preview inline; PDF, Word, Excel and code are linked with an icon. They are stored on your computer and travel with you if you sync. Offline cache configurable under Settings → Sync.
 
 ## Templates
 
@@ -1783,11 +1783,11 @@ A "Templates" folder per vault. Variables \`{{date}}\`, \`{{time}}\`, \`{{cursor
 
 ## Sync (optional)
 
-Create an account in Settings → Sync. The Free plan works without sync (everything local). Higher plans sync between devices in real time (Yjs CRDT) and share workspaces.
+Your notes live on your computer, and there are no accounts or plans. To use them on other computers, connect them to a server of your own: Settings → Sync explains how to set one up and how to pair each device with a link. Everything is encrypted.
 
 ## MCP — AIs with your notes
 
-Settings → MCP wires Edinot up to Claude Desktop, Codex, Claude Code or Cursor. The AI can read and write your notes live.
+Settings → Connections wires Edinot up to Claude Desktop, Codex, Claude Code or Cursor. The AI can read and write your notes live. Edinot has no AI of its own.
 
 ## YouTube videos
 
