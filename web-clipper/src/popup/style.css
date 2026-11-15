@@ -1,0 +1,81 @@
+:root {
+  color-scheme: light dark;
+  --bg: #fafafa;
+  --fg: #111;
+  --muted: #666;
+  --border: #ddd;
+  --accent: #5b3df5;
+  --error: #c62828;
+  --ok: #2e7d32;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1e1e22;
+    --fg: #eee;
+    --muted: #aaa;
+    --border: #333;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font: 13px/1.4 system-ui, -apple-system, sans-serif;
+  width: 340px;
+  background: var(--bg);
+  color: var(--fg);
+}
+#app { padding: 12px; }
+.hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.pill {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--border);
+  font-size: 11px;
+}
+.pill.ok { background: #2e7d32; color: #fff; }
+.pill.bad { background: #c62828; color: #fff; }
+label {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 8px;
+}
+input, select, button {
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  width: 100%;
+  margin-top: 2px;
+}
+.row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+button {
+  cursor: pointer;
+  width: auto;
+  padding: 6px 12px;
+}
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+button.ghost { background: transparent; }
+.muted { color: var(--muted); font-size: 12px; }
+.error { color: var(--error); font-size: 12px; min-height: 14px; }
+.ok { color: var(--ok); font-size: 12px; min-height: 14px; }

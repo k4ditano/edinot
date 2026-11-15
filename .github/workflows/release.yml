@@ -1,0 +1,206 @@
+name: release
+
+# Se dispara al subir una etiqueta como v1.3.1. Compila los instaladores en Linux, Windows y macOS
+# (runners de GitHub) y los publica en una release de GitHub, que es de donde el actualizador
+# integrado de la app (electron-updater, proveedor «github») los descarga. No hace falta ningún
+# servidor ni secreto propio: solo el GITHUB_TOKEN que da Actions.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read   # el job de publicación lo sube a «write» solo para él
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build-${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_glob: |
+              release/*.AppImage
+              release/*.AppImage.blockmap
+              release/*.deb
+              release/edinot-hub-linux.tar.gz
+              release/latest-linux*.yml
+          - os: windows-latest
+            artifact_glob: |
+              release/*.exe
+              release/*.exe.blockmap
+              release/latest.yml
+          - os: macos-latest
+            artifact_glob: |
+              release/*.dmg
+              release/*.dmg.blockmap
+              release/*.zip
+              release/*.zip.blockmap
+              release/latest-mac.yml
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build app + installers
+        shell: bash
+        env:
+          # No Apple Developer ID cert configured — skip signing/notarisation
+          # so electron-builder doesn't error out searching the keychain.
+          # The resulting .dmg/.zip are unsigned; users get a Gatekeeper
+          # warning on first open and the in-app updater on macOS won't be
+          # able to verify the signed feed (mac users update by re-downloading).
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          npm run build
+          # Build only this runner's platform. electron-builder no publica: lo hace el job «publish» —
+          # así los instaladores de los tres sistemas acaban en la MISMA release.
+          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            npx electron-builder --linux AppImage deb --x64 --arm64 --publish never
+          elif [ "${{ matrix.os }}" = "windows-latest" ]; then
+            npx electron-builder --win nsis portable --x64 --publish never
+          else
+            # macOS: keep targets minimal to avoid the `EEXIST: link
+            # icon.png` race that hits whenever dmg + zip run together (both
+            # hardlink the icon into their staging dirs). zip alone is what
+            # electron-updater consumes on mac, and users can drag-install
+            # from it. Build x64 then arm64 sequentially to keep the
+            # staging dirs from colliding either.
+            #
+            # Each electron-builder run rewrites latest-mac.yml with a
+            # files[] array that only contains the arch it just built — so
+            # the second run silently clobbers the first and Intel Macs end
+            # up with no matching binary in the published manifest. We
+            # stash the x64 manifest before the arm64 run, then merge them
+            # back together so both arches appear.
+            npx electron-builder --mac zip --x64   --publish never
+            cp release/latest-mac.yml release/latest-mac.x64.yml
+            npx electron-builder --mac zip --arm64 --publish never
+            node scripts/merge-mac-yml.mjs \
+              release/latest-mac.x64.yml \
+              release/latest-mac.yml \
+              release/latest-mac.yml
+            rm -f release/latest-mac.x64.yml
+          fi
+
+      # Hand the installers to the publish job through the Actions cache,
+      # not artifacts: artifacts count against the account's storage quota,
+      # which filled up and blocked v1.1.79/v1.1.80 for days. The cache has
+      # its own 10 GB per repo and evicts old entries by itself. Same path
+      # list on save and restore (it's part of the cache version).
+      - name: Package the headless hub (server install)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          npm run build
+          mkdir -p release
+          tar -czf release/edinot-hub-linux.tar.gz -C dist edinot.mjs hub.mjs -C ../deploy/hub install.sh README.md
+
+      - name: Save installers
+        uses: actions/cache/save@v4
+        with:
+          key: release-${{ matrix.os }}-${{ github.sha }}
+          enableCrossOsArchive: true
+          path: |
+            release/*.AppImage
+            release/*.AppImage.blockmap
+            release/*.deb
+            release/edinot-hub-linux.tar.gz
+            release/*.exe
+            release/*.exe.blockmap
+            release/*.dmg
+            release/*.dmg.blockmap
+            release/*.zip
+            release/latest*.yml
+
+  publish:
+    name: publish GitHub release
+    needs: build
+    # Aunque falle un sistema operativo, se publica lo que sí se haya compilado.
+    if: ${{ !cancelled() && needs.build.result != 'cancelled' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Restore ubuntu-latest installers
+        uses: actions/cache/restore@v4
+        with:
+          key: release-ubuntu-latest-${{ github.sha }}
+          enableCrossOsArchive: true
+          path: |
+            release/*.AppImage
+            release/*.AppImage.blockmap
+            release/*.deb
+            release/edinot-hub-linux.tar.gz
+            release/*.exe
+            release/*.exe.blockmap
+            release/*.dmg
+            release/*.dmg.blockmap
+            release/*.zip
+            release/latest*.yml
+
+      - name: Restore windows-latest installers
+        uses: actions/cache/restore@v4
+        with:
+          key: release-windows-latest-${{ github.sha }}
+          enableCrossOsArchive: true
+          path: |
+            release/*.AppImage
+            release/*.AppImage.blockmap
+            release/*.deb
+            release/edinot-hub-linux.tar.gz
+            release/*.exe
+            release/*.exe.blockmap
+            release/*.dmg
+            release/*.dmg.blockmap
+            release/*.zip
+            release/latest*.yml
+
+      - name: Restore macos-latest installers
+        uses: actions/cache/restore@v4
+        with:
+          key: release-macos-latest-${{ github.sha }}
+          enableCrossOsArchive: true
+          path: |
+            release/*.AppImage
+            release/*.AppImage.blockmap
+            release/*.deb
+            release/edinot-hub-linux.tar.gz
+            release/*.exe
+            release/*.exe.blockmap
+            release/*.dmg
+            release/*.dmg.blockmap
+            release/*.zip
+            release/latest*.yml
+
+      - name: List installers
+        run: ls -la release/
+
+      # Los latest*.yml tienen que ir en la release con esos nombres: el actualizador los busca ahí.
+      - name: Create the release and upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          shopt -s nullglob
+          files=(release/*.AppImage release/*.AppImage.blockmap release/*.deb release/edinot-hub-linux.tar.gz \
+                 release/*.exe release/*.exe.blockmap release/*.dmg release/*.dmg.blockmap \
+                 release/*.zip release/latest*.yml)
+          [ ${#files[@]} -gt 0 ] || { echo "no hay instaladores que publicar"; exit 1; }
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes
+          gh release upload "$TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber

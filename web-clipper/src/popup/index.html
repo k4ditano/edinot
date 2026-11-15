@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Edinot Web Clipper</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main id="app">
+    <header class="hdr">
+      <strong>Edinot</strong>
+      <span id="status-pill" class="pill">…</span>
+    </header>
+
+    <section id="pair-view" hidden>
+      <p class="muted">Pair this extension with your Edinot app.</p>
+      <label>Pairing token
+        <input id="pair-token" type="text" placeholder="Paste token from Settings → Web Clipper" />
+      </label>
+      <button id="pair-btn" class="primary">Pair</button>
+      <p id="pair-error" class="error"></p>
+    </section>
+
+    <section id="clip-view" hidden>
+      <label>Title
+        <input id="f-title" type="text" />
+      </label>
+      <div class="row">
+        <label>Vault
+          <select id="f-vault"></select>
+        </label>
+        <label>Folder
+          <select id="f-folder"></select>
+        </label>
+      </div>
+      <div class="row">
+        <label>Template
+          <select id="f-template"></select>
+        </label>
+        <label>Mode
+          <select id="f-mode">
+            <option value="article">Article</option>
+            <option value="selection">Selection</option>
+            <option value="bookmark">Bookmark</option>
+          </select>
+        </label>
+      </div>
+      <label>Tags
+        <input id="f-tags" type="text" placeholder="comma,separated" />
+      </label>
+      <div class="actions">
+        <button id="clip-btn" class="primary">Clip</button>
+        <button id="reset-btn" class="ghost" title="Unpair">Unpair</button>
+      </div>
+      <p id="clip-error" class="error"></p>
+      <p id="clip-ok" class="ok"></p>
+    </section>
+  </main>
+  <script type="module" src="index.js"></script>
+</body>
+</html>

@@ -1,0 +1,197 @@
+{
+  "name": "edinot",
+  "version": "1.3.1",
+  "description": "Edinot — cross-platform Markdown editor (Electron)",
+  "main": "electron/main.cjs",
+  "author": "edinot",
+  "license": "BSD-3-Clause",
+  "scripts": {
+    "build": "node build/build.mjs",
+    "start": "npm run build && electron .",
+    "dev": "node build/build.mjs --watch",
+    "cli": "node cli/edinot.mjs",
+    "mcp": "node mcp/server.mjs",
+    "test": "node --test --test-concurrency=1 test/ shared/ ui/allnotes/ ui/settings/ editor/db/ hub/",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder -mwl --x64 --arm64",
+    "dist:mac": "npm run build && electron-builder --mac --x64 --arm64",
+    "dist:win": "npm run build && electron-builder --win --x64 --arm64",
+    "dist:linux": "npm run build && electron-builder --linux --x64 --arm64"
+  },
+  "dependencies": {
+    "@codemirror/commands": "^6.10.3",
+    "@codemirror/lang-markdown": "^6.5.0",
+    "@codemirror/language": "^6.12.3",
+    "@codemirror/state": "^6.6.0",
+    "@codemirror/view": "^6.42.1",
+    "@hocuspocus/provider": "^4.0.0",
+    "@hocuspocus/server": "2.15.3",
+    "@joplin/turndown-plugin-gfm": "^1.0.67",
+    "@kenjiuno/msgreader": "^1.28.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@replit/codemirror-vim": "^6.3.0",
+    "codemirror": "^6.0.2",
+    "electron-updater": "^6.8.3",
+    "highlight.js": "^11.12.0",
+    "html-to-docx": "^1.8.0",
+    "katex": "^0.19.1",
+    "mailparser": "^3.9.9",
+    "mammoth": "^1.12.0",
+    "markdown-it": "^14.1.1",
+    "markdown-it-footnote": "^4.0.0",
+    "markdown-it-task-lists": "^2.1.1",
+    "pdf-parse": "^2.4.5",
+    "qrcode": "1.5.4",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "roughjs": "^4.6.6",
+    "selfsigned": "5.5.0",
+    "turndown": "^7.2.4",
+    "ws": "^8.20.1",
+    "xlsx": "^0.18.5",
+    "y-codemirror.next": "^0.3.5",
+    "y-indexeddb": "^9.0.12",
+    "yjs": "^13.6.30",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "electron": "33.2.0",
+    "electron-builder": "25.1.8",
+    "esbuild": "0.24.0"
+  },
+  "build": {
+    "appId": "io.edinot.app",
+    "productName": "Edinot",
+    "asar": true,
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "k4ditano",
+        "repo": "edinot",
+        "releaseType": "release"
+      }
+    ],
+    "fileAssociations": [
+      {
+        "ext": "md",
+        "name": "Markdown",
+        "role": "Editor"
+      },
+      {
+        "ext": "markdown",
+        "name": "Markdown",
+        "role": "Editor"
+      },
+      {
+        "ext": "txt",
+        "name": "Texto",
+        "role": "Editor"
+      }
+    ],
+    "protocols": [
+      {
+        "name": "Edinot",
+        "schemes": [
+          "edinot"
+        ]
+      }
+    ],
+    "directories": {
+      "output": "release",
+      "buildResources": "build/resources"
+    },
+    "files": [
+      "electron/**/*",
+      "dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/resources/icon.png",
+        "to": "app-icon.png"
+      },
+      {
+        "from": "dist/mcp-server.mjs",
+        "to": "mcp-server.mjs"
+      },
+      {
+        "from": "dist/hub.mjs",
+        "to": "hub.mjs"
+      },
+      {
+        "from": "dist/edinot.mjs",
+        "to": "edinot.mjs"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "build/resources/icon.png",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "writeUpdateInfo": false
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "build/resources/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "build/resources/icon.png",
+      "category": "Utility",
+      "maintainer": "edinot"
+    }
+  }
+}

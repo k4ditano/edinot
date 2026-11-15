@@ -1,0 +1,18 @@
+#!/usr/bin/env node
+// Una CLI «claude» falsa para las pruebas: lee el texto por stdin y contesta en
+// stream-json como `claude --print --output-format stream-json`. FAKE_CLAUDE:
+// ok (por defecto) | nosession | network.
+let input = '';
+process.stdin.on('data', (c) => { input += c; });
+process.stdin.on('end', async () => {
+  const mode = process.env.FAKE_CLAUDE || 'ok';
+  if (mode === 'nosession') { process.stdout.write(JSON.stringify({ type: 'result', is_error: true, result: 'Invalid API key · Please run /login' }) + '\n'); process.exit(1); }
+  if (mode === 'network') { process.stderr.write('Error: getaddrinfo ENOTFOUND api.anthropic.com\n'); process.exit(1); }
+  const { answerFor } = await import(process.env.FAKE_AI_MODULE);
+  const sys = input.split('\n\n')[0];
+  const text = answerFor({ system: sys, messages: [{ role: 'user', content: input.slice(sys.length).replace(/^\s*Usuario: /, '') }] });
+  process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', session_id: '00000000-0000-0000-0000-000000000000' }) + '\n');
+  await new Promise(r => setTimeout(r, 300));
+  process.stdout.write(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text }] } }) + '\n');
+  process.stdout.write(JSON.stringify({ type: 'result', is_error: false, result: text }) + '\n');
+});

@@ -1,0 +1,22 @@
+{
+  "name": "edinot-web-clipper",
+  "version": "0.1.0",
+  "description": "Edinot Web Clipper — Chrome + Firefox extension",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "build:chrome": "node build.mjs --target=chrome",
+    "build:firefox": "node build.mjs --target=firefox",
+    "build:all": "node build.mjs --target=chrome && node build.mjs --target=firefox",
+    "watch": "node build.mjs --watch"
+  },
+  "dependencies": {
+    "@mozilla/readability": "^0.5.0",
+    "turndown": "^7.2.4",
+    "turndown-plugin-gfm": "^1.0.2"
+  },
+  "devDependencies": {
+    "esbuild": "0.24.0"
+  }
+}

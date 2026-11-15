@@ -1,0 +1,732 @@
+/* ─────────────────────────────────────────────────────────────────────
+   Edinot — capa de diseño estilo AFFiNE / Notion (v2).
+   Valores medidos en app.affine.pro (2026-11-12): Inter, texto 16/24,
+   título 40/700, H2 26/600, filas de barra lateral de 30 px y radio 4,
+   texto principal #141414 / secundario #7A7A7A, borde #E6E6E6, acento
+   #1E96EB, barra lateral #F5F5F5. Se carga la ÚLTIMA; los colores salen
+   del tema (ui/shared/themes.js), así que vale para todos los temas.
+   ───────────────────────────────────────────────────────────────────── */
+
+/* ── Tokens del diseño de referencia ───────────────────────────────── */
+:root, .macwin {
+  --font-serif: var(--font-ui);
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-pill: 999px;
+  --radius-card: 24px;
+  --row-h: 38px;
+  --card-margin: 10px;
+  --app-bg: #E9EAEC;
+  --pill-bg: #FFFFFF;
+  --shadow-card: 0 1px 2px rgba(17, 24, 28, .05), 0 18px 48px rgba(17, 24, 28, .12);
+  --shadow-pop: 0 0 0 1px rgba(17, 24, 28, .05), 0 8px 24px rgba(17, 24, 28, .10), 0 24px 56px rgba(17, 24, 28, .10);
+  --shadow-float: 0 0 0 1px rgba(17, 24, 28, .05), 0 4px 16px rgba(17, 24, 28, .08);
+  --shadow-pill: 0 1px 2px rgba(17, 24, 28, .08), 0 0 0 1px rgba(17, 24, 28, .04);
+  /* Pasteles: solo para el contenido (eventos, etiquetas, notas del canvas). */
+  --pastel-lilac: #E7DFFA;   --pastel-lilac-ink: #493C77;
+  --pastel-blue: #D9ECFB;    --pastel-blue-ink: #234F6E;
+  --pastel-green: #D4F1DE;   --pastel-green-ink: #245E3A;
+  --pastel-peach: #FCE8C9;   --pastel-peach-ink: #765022;
+  --pastel-indigo: #D9DDFA;  --pastel-indigo-ink: #353E85;
+  --pastel-rose: #FADDE4;    --pastel-rose-ink: #783346;
+}
+:root.dark, .macwin.dark {
+  --app-bg: #0B0C0C;
+  --pill-bg: #2B3231;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, .4), 0 18px 48px rgba(0, 0, 0, .5);
+  --shadow-pop: 0 0 0 1px rgba(255, 255, 255, .08), 0 8px 24px rgba(0, 0, 0, .45), 0 24px 56px rgba(0, 0, 0, .5);
+  --shadow-float: 0 0 0 1px rgba(255, 255, 255, .08), 0 4px 16px rgba(0, 0, 0, .4);
+  --shadow-pill: 0 1px 2px rgba(0, 0, 0, .4), 0 0 0 1px rgba(255, 255, 255, .05);
+  --pastel-lilac: #3A3358;   --pastel-lilac-ink: #D9CFFA;
+  --pastel-blue: #213B4E;    --pastel-blue-ink: #BFE0F8;
+  --pastel-green: #234431;   --pastel-green-ink: #BDEBCD;
+  --pastel-peach: #4D3A1E;   --pastel-peach-ink: #F6DDB4;
+  --pastel-indigo: #2E3459;  --pastel-indigo-ink: #CBD1FA;
+  --pastel-rose: #4C2B35;    --pastel-rose-ink: #F5CBD6;
+}
+body, .macwin { -webkit-font-smoothing: antialiased; font-feature-settings: 'cv11', 'ss01'; }
+
+/* ── Marco: tarjeta redondeada sobre gris (la ventana flotante no lleva) ─ */
+html, body { background: var(--app-bg); }
+#root:has(> .macwin) { box-sizing: border-box; padding: var(--card-margin); }
+.macwin { border-radius: var(--radius-card); box-shadow: var(--shadow-card); }
+
+/* ── Barra lateral ─────────────────────────────────────────────────── */
+.sh-side:not(.sh-rail) { width: 264px; padding: 20px 14px 14px; gap: 2px; }
+/* Un solo degradado para toda la columna izquierda: carril plegado, barra abierta y los
+   paneles de Calendario y Ajustes (que van junto al carril). Está anclado a la izquierda y
+   tiene un ancho fijo (carril 56 + panel 248), así que cada pieza enseña su trozo y, al
+   abrir o plegar, el color de un mismo punto no cambia: no hay salto. */
+.macwin {
+  --rail-w: 56px;
+  --side-span: 304px;
+  --side-grad: linear-gradient(165deg, var(--side) 0%, color-mix(in srgb, var(--side) 42%, var(--bg)) 62%, color-mix(in srgb, var(--side) 22%, var(--bg)) 100%);
+  --side-end: color-mix(in srgb, var(--side) 22%, var(--bg));
+}
+.sh-side, .sh-side.sh-rail {
+  border-right: 0 !important; box-shadow: none;
+  background: var(--side-grad) 0 0 / var(--side-span) 100% no-repeat, var(--side-end) !important;
+}
+/* El panel que sigue al carril (Calendario, Ajustes) continúa el mismo degradado. */
+.cp-wrap .cp-side, .st-page .st-nav {
+  background: var(--side-grad) calc(var(--rail-w) * -1) 0 / var(--side-span) 100% no-repeat, var(--side-end) !important;
+}
+.sh-side-head { padding: 0 2px 10px; gap: 6px; }
+.sh-ws { padding: 0 !important; gap: 10px; border-radius: var(--radius-pill); background: transparent !important; }
+.sh-ws:hover .sh-ws-name { text-decoration: none; }
+.sh-ws-avatar { width: 36px !important; height: 36px !important; border-radius: 12px !important; }
+.sh-ws-avatar svg { width: 36px; height: 36px; border-radius: 12px !important; }
+.sh-ws-name { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+.sh-ws-sub { display: none; }
+.sh-new {
+  border: 0 !important; background: color-mix(in srgb, var(--bg) 55%, transparent) !important; color: var(--fg) !important;
+  width: 32px; height: 32px; border-radius: var(--radius-pill) !important; box-shadow: var(--shadow-pill);
+}
+.sh-new:hover { background: var(--pill-bg) !important; }
+
+/* «Buscar» como una fila más, en píldora clara; el atajo, como tecla gris. */
+.sh-search {
+  height: var(--row-h) !important; padding: 0 12px !important; gap: 10px !important; border: 0 !important; margin: 2px 0 4px;
+  background: color-mix(in srgb, var(--bg) 52%, transparent) !important; border-radius: var(--radius-pill) !important;
+  color: var(--muted) !important; font-size: 13.5px !important; box-shadow: var(--shadow-pill);
+}
+.sh-search:hover { background: var(--pill-bg) !important; color: var(--fg) !important; }
+.sh-kbd, .pal-kbd {
+  font-family: var(--font-ui) !important; font-size: 11px !important; font-weight: 500; line-height: 1;
+  border: 0 !important; border-radius: 6px !important; padding: 4px 6px !important;
+  background: color-mix(in srgb, var(--fg) 9%, transparent) !important; color: var(--muted) !important;
+}
+
+.sh-nav, .sh-tree-row, .sh-fav {
+  height: var(--row-h) !important; min-height: var(--row-h) !important; border-radius: var(--radius-pill) !important;
+  font-size: 13.5px !important; color: var(--fg) !important; font-weight: 500 !important;
+}
+.sh-tree-row, .sh-fav { height: 34px !important; min-height: 34px !important; border-radius: var(--radius) !important; font-weight: 400 !important; }
+.sh-nav { padding: 0 12px !important; gap: 12px !important; }
+.sh-nav svg, .sh-tree-ic svg, .sh-search svg { color: var(--fg); opacity: .78; stroke-width: 1.6; }
+.sh-nav:hover, .sh-tree-row:hover, .sh-fav:hover { background: color-mix(in srgb, var(--bg) 55%, transparent) !important; }
+.sh-nav.on, .sh-tree-row.on, .sh-fav.on { background: var(--pill-bg) !important; box-shadow: var(--shadow-pill); font-weight: 600 !important; }
+.sh-nav.on svg { opacity: 1; }
+.sh-nav-meta, .sh-tree-count { font-size: 12px !important; color: var(--faint) !important; }
+/* Insignia: círculo negro con el número. */
+.sh-badge {
+  min-width: 20px; height: 20px; padding: 0 6px !important; box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-pill) !important; background: var(--accent) !important; color: var(--accent-fg) !important; font-size: 11px !important; font-weight: 600; line-height: 1;
+}
+
+/* Títulos de sección: 12 px gris, sin mayúsculas («Menú principal», «Notas»…). */
+.sh-sec-head, .sh-sec-head h2 { font-size: 12px !important; font-weight: 500 !important; letter-spacing: 0 !important; text-transform: none !important; color: var(--muted) !important; margin: 0; }
+.sh-sec-head { padding: 18px 12px 6px !important; }
+.sh-sec-main { padding-top: 12px !important; }
+.sh-side-foot { border-top: 0 !important; padding: 4px 0 0; flex-direction: column; align-items: stretch; gap: 1px; }
+.sh-foot-head { padding: 12px 12px 6px !important; }
+
+/* Cuenta: avatar redondo, nombre y estado de sincronización. */
+.sh-sync.sh-account { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: var(--radius-pill); width: 100%; text-align: left; color: var(--fg); }
+.sh-sync.sh-account:hover { background: color-mix(in srgb, var(--bg) 55%, transparent); }
+.sh-account-avatar { flex: none; display: inline-flex; border-radius: 50%; overflow: hidden; box-shadow: 0 0 0 2px var(--bg); }
+.sh-account-avatar svg { border-radius: 50% !important; }
+.sh-account-text { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+.sh-account-name { font-size: 13.5px; font-weight: 600; letter-spacing: -0.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sh-account-sub { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 400; color: var(--muted); }
+.sh-account-sub .sh-sync-dot { width: 6px; height: 6px; }
+
+/* Notas sin icono propio: icono de página en el hueco izquierdo (columna de iconos, ver «una sola cuadrícula»). */
+.sh-tree-row:has(> .sh-tree-label:first-child)::before {
+  content: ''; flex: none; width: 16px; height: 16px; margin: 0 0 0 calc(-1 * (var(--sb-ic, 16px) + var(--sb-gap, 10px)));
+  background: var(--muted);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z'/%3E%3Cpath d='M14 3v5h5'/%3E%3C/svg%3E") center / contain no-repeat;
+          mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z'/%3E%3Cpath d='M14 3v5h5'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+/* Carril colapsado: 52 px, iconos centrados (antes heredaba los 248 px). */
+.sh-side.sh-rail { width: 56px !important; padding: 18px 0 12px !important; align-items: center; }
+.sh-rail-btn { width: 38px !important; height: 38px !important; border-radius: var(--radius-pill) !important; color: var(--muted) !important; }
+.sh-rail-btn:hover { background: color-mix(in srgb, var(--bg) 55%, transparent) !important; color: var(--fg) !important; }
+.sh-rail-btn.on { background: var(--pill-bg) !important; box-shadow: var(--shadow-pill); color: var(--fg) !important; }
+.sh-rail-badge { background: var(--accent) !important; color: var(--accent-fg) !important; }
+.sh-rail-ws { width: 34px !important; height: 34px !important; border-radius: 11px !important; }
+
+/* ── Barra superior: migas de pan en una barra clara y redondeada ──── */
+.sh-top {
+  height: 52px; margin: 14px 18px 0; padding: 0 8px 0 14px; gap: 8px;
+  border: 1px solid var(--line) !important; border-radius: var(--radius-lg); background: var(--bg);
+}
+.sh-crumb { font-size: 13.5px; color: var(--muted); }
+.sh-crumb-title { font-size: 14px; font-weight: 600 !important; color: var(--fg); letter-spacing: -0.01em; }
+.sh-crumb-sep { color: var(--faint); }
+.sh-save { font-size: 12px; color: var(--faint); }
+.sh-iconbtn { width: 32px; height: 32px; border-radius: var(--radius-pill) !important; color: var(--muted); }
+.sh-iconbtn:hover:not(:disabled) { background: var(--hover) !important; color: var(--fg); }
+.sh-iconbtn.on { background: var(--hover) !important; color: var(--fg) !important; }
+
+/* Leer / Editar: píldora gris con la activa en blanco. */
+.sh-seg { background: color-mix(in srgb, var(--fg) 6%, transparent) !important; border: 0 !important; border-radius: var(--radius-pill) !important; padding: 3px !important; height: 36px; gap: 0; }
+.sh-seg-btn { height: 30px !important; border-radius: var(--radius-pill) !important; font-size: 13px !important; font-weight: 500 !important; color: var(--muted) !important; padding: 0 14px !important; }
+.sh-seg-btn.on { background: var(--pill-bg) !important; color: var(--fg) !important; box-shadow: var(--shadow-pill) !important; }
+
+/* El botón principal («Compartir») es negro, en píldora. */
+.sh-top-right > .sh-btn, .sh-top .sh-btn {
+  height: 34px !important; padding: 0 16px !important; border: 0 !important; border-radius: var(--radius-pill) !important;
+  background: var(--accent) !important; color: var(--accent-fg) !important; font-size: 13px !important; font-weight: 500 !important; gap: 6px;
+}
+.sh-top .sh-btn:hover { background: color-mix(in srgb, var(--accent) 86%, var(--bg)) !important; }
+.sh-top .sh-btn svg { color: var(--accent-fg); }
+
+/* ── Menús, paleta y popovers ──────────────────────────────────────── */
+.sh-menu, .pal, .blk-pop, .blk-slash, .blk-bubble, .blk-menu, .ctx-menu, .cm-tooltip-autocomplete {
+  border-radius: var(--radius-lg) !important; box-shadow: var(--shadow-pop) !important; border: 0 !important; background: var(--bg) !important;
+}
+.sh-menu { padding: 8px; gap: 2px; font-size: 13.5px; }
+.sh-mi, .blk-slash-it, .blk-menu-it { border-radius: var(--radius-sm) !important; font-size: 13.5px; font-weight: 500; }
+.sh-mi { min-height: 36px; padding: 4px 12px; gap: 12px; }
+.sh-mi.focused, .sh-mi:focus-visible, .blk-slash-it.on, .blk-menu-it:hover { background: color-mix(in srgb, var(--fg) 6%, transparent) !important; }
+.sh-mi-ic { color: var(--fg); opacity: .75; }
+.sh-mi.danger { color: #C2410C; }
+.sh-mi-kbd { font-family: var(--font-ui); font-size: 11px; font-weight: 500; padding: 3px 6px; border-radius: 6px; background: color-mix(in srgb, var(--fg) 8%, transparent); color: var(--muted); }
+.sh-mi-sep { margin: 6px 4px; }
+.sh-mi-head { text-transform: none; letter-spacing: 0; font-size: 12px; font-weight: 500; color: var(--muted); padding: 10px 12px 4px; }
+.blk-slash-ic { border-radius: var(--radius-sm) !important; border-color: var(--line) !important; }
+
+/* El anillo de foco, en gris suave (en negro pesaba demasiado); las filas de menú ya marcan el foco con el fondo. */
+.shell :focus-visible, .sh-menu :focus-visible, .pal :focus-visible { outline: 2px solid color-mix(in srgb, var(--fg) 30%, transparent); outline-offset: 1px; }
+.sh-menu .sh-mi:focus-visible, .pal .pal-row:focus-visible { outline: none; }
+
+/* Paleta Ctrl K */
+.pal { border-radius: var(--radius-card) !important; }
+.pal-input-row { height: 64px; padding: 0 24px; }
+.pal-chip { height: 30px; padding: 0 14px; background: color-mix(in srgb, var(--fg) 5%, transparent); border-color: transparent; font-weight: 500; }
+.pal-chip.on { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.pal-row { border-radius: var(--radius); }
+/* Fila enfocada bien visible (antes un 6 % de --fg, casi invisible sobre fondo claro):
+   relleno propio + barra de acento a la izquierda. El hover va más suave. */
+.pal-row.focused { background: color-mix(in srgb, var(--fg) 11%, var(--bg)); box-shadow: inset 3px 0 0 var(--accent); }
+.pal-row:not(.focused):hover { background: color-mix(in srgb, var(--fg) 6%, var(--bg)); }
+.pal-row.focused .pal-ic { color: var(--fg); }
+.pal-group { text-transform: none; letter-spacing: 0; font-size: 12px; font-weight: 500; }
+
+/* ── Cuerpo de nota: 16/24, título 40/700, H2 26/600 ─────────────────── */
+.shell .md-render, .cm-host .cm-blk-editor .cm-scroller { line-height: 1.5 !important; color: var(--fg); }
+.shell .md-render .md-h, .shell .cm-host .cm-line.cm-lp-h1, .shell .cm-host .cm-line.cm-lp-h2,
+.shell .cm-host .cm-line.cm-lp-h3, .shell .cm-host .cm-line.cm-lp-h4 { font-family: var(--font-ui) !important; font-weight: 600 !important; letter-spacing: -0.02em !important; }
+.shell .md-render .md-h1, .cm-blk-title, .shell .cm-host .cm-line.cm-lp-h1 { font-size: 2.25em !important; font-weight: 650 !important; letter-spacing: -0.03em !important; line-height: 1.2 !important; }
+.shell .md-render .md-h2, .shell .cm-host .cm-line.cm-lp-h2 { font-size: 1.625em !important; line-height: 1.38 !important; }
+.shell .md-render .md-h3, .shell .cm-host .cm-line.cm-lp-h3 { font-size: 1.375em !important; line-height: 1.4 !important; }
+.shell .md-render .md-h4, .shell .cm-host .cm-line.cm-lp-h4 { font-size: 1.125em !important; }
+.shell .md-render .md-p { margin: 0.5em 0; }
+.md-render a:not(.wikilink) { color: var(--accent); border-bottom: 0 !important; text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--accent) 35%, transparent); text-underline-offset: 3px; }
+.md-render a:not(.wikilink):hover { text-decoration-color: var(--accent); }
+.md-render input[type="checkbox"], .cm-host input[type="checkbox"] { accent-color: var(--accent); }
+.cm-host .cm-blk-editor .cm-lp-link:not(.cm-lp-wikilink) { color: var(--accent) !important; border-bottom: 0 !important; text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--accent) 35%, transparent); text-underline-offset: 3px; }
+.md-render a.wikilink, .cm-host .cm-blk-editor .cm-lp-wikilink { color: inherit !important; border-bottom: 1px solid color-mix(in srgb, var(--fg) 30%, transparent) !important; }
+.md-render a.wikilink::before, .cm-host .cm-blk-editor .cm-lp-wikilink::before {
+  content: ''; display: inline-block; width: 14px; height: 14px; margin-right: 3px; vertical-align: -2px; background: var(--muted);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z'/%3E%3Cpath d='M14 3v5h5'/%3E%3C/svg%3E") center / contain no-repeat;
+          mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z'/%3E%3Cpath d='M14 3v5h5'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+.md-render code:not(pre code), .cm-host .cm-blk-editor .cm-lp-code:not(.cm-lp-block) {
+  background: color-mix(in srgb, var(--fg) 6%, transparent) !important; color: inherit !important; border: 1px solid var(--line);
+  border-radius: var(--radius-sm) !important; padding: 0.05em 0.3em !important; font-size: 0.85em !important;
+}
+.shell .md-render .md-quote, .cm-host .cm-blk-editor .cm-line.cm-lp-quote { border-left: 2px solid var(--line) !important; color: var(--fg) !important; font-style: normal !important; padding-left: 16px; }
+.md-render .md-pre { background: color-mix(in srgb, var(--fg) 3%, var(--bg)) !important; border: 1px solid var(--line) !important; border-radius: var(--radius-lg) !important; padding: 16px 18px !important; }
+.md-render .md-table th, .md-render .md-table td { border-color: var(--line) !important; }
+.md-render .md-table th { background: transparent !important; color: var(--muted); font-weight: 500; }
+.md-render .md-hr { border-top-color: var(--line) !important; }
+.md-render .md-callout { border-radius: var(--radius-lg) !important; }
+.cm-host .cm-blk-editor .cm-line.cm-lp-callout { border-radius: 0 !important; }
+.cm-host .cm-blk-editor .cm-line.cm-lp-callout-first { border-top-left-radius: var(--radius-lg) !important; border-top-right-radius: var(--radius-lg) !important; }
+.cm-host .cm-blk-editor .cm-line.cm-lp-callout-last { border-bottom-left-radius: var(--radius-lg) !important; border-bottom-right-radius: var(--radius-lg) !important; }
+.md-render img.md-img-real, .cm-host .cm-lp-block .md-img-real { border-radius: var(--radius-lg) !important; }
+.cm-host .cm-blk-editor ::selection { background: color-mix(in srgb, var(--accent) 22%, transparent) !important; }
+.cm-blk-handles button { border-radius: var(--radius-sm) !important; }
+
+/* Etiquetas/propiedades bajo el título: discretas, como «Info» en AFFiNE. */
+.blk-props, .blk-tags { opacity: .9; }
+.blk-tag, .blk-prop-add, .md-tag-add { border-radius: var(--radius-sm) !important; border-style: solid !important; border-color: transparent !important; color: var(--muted) !important; }
+.blk-tag:hover, .blk-prop-add:hover { background: var(--hover) !important; }
+
+/* ── Panel derecho ─────────────────────────────────────────────────── */
+.sh-ctx { border-left: 0 !important; box-shadow: none !important; background: var(--bg) !important; }
+.sh-tabs { background: transparent !important; border: 0 !important; border-radius: 0 !important; padding: 12px 12px 4px !important; gap: 6px; }
+.sh-tab {
+  height: 30px; border-radius: var(--radius-pill) !important; background: color-mix(in srgb, var(--fg) 5%, transparent) !important; box-shadow: none !important;
+  color: var(--muted) !important; font-size: 13px !important; font-weight: 500 !important; border: 0 !important; padding: 0 14px !important;
+}
+.sh-tab:hover { color: var(--fg) !important; }
+.sh-tab.on { background: var(--accent) !important; color: var(--accent-fg) !important; }
+.sh-ctx-h, .pal-group, .hm-h3, .cp-h3, .blk-slash-grp, .blk-pop-sub, .st-grp, .st-sub-label {
+  text-transform: none !important; letter-spacing: 0 !important; font-size: 12px !important; font-weight: 500 !important; color: var(--muted) !important;
+}
+.sh-outline-item { border-radius: var(--radius-sm) !important; font-size: 13px !important; }
+.sh-outline-item.on { background: color-mix(in srgb, var(--fg) 6%, transparent) !important; color: var(--fg) !important; font-weight: 600; }
+
+/* ── Inicio ────────────────────────────────────────────────────────── */
+.hm-greet { font-weight: 650 !important; letter-spacing: -0.03em !important; font-size: 32px !important; }
+.hm-card, .hm-recent, .sh-card { border-radius: var(--radius-xl) !important; border: 1px solid var(--line) !important; box-shadow: none !important; background: var(--bg) !important; }
+.hm-card:hover, .sh-card:hover { background: color-mix(in srgb, var(--fg) 2.5%, var(--bg)) !important; }
+/* Acciones rápidas: filtros en píldora gris. */
+.hm-qa {
+  height: 36px; padding: 0 16px !important; font-size: 13px !important; font-weight: 500 !important; border: 0 !important;
+  border-radius: var(--radius-pill) !important; background: color-mix(in srgb, var(--fg) 6%, transparent) !important; color: var(--fg) !important;
+}
+.hm-qa:hover { background: color-mix(in srgb, var(--fg) 10%, transparent) !important; }
+.hm-qa svg { color: var(--fg); opacity: .8; }
+
+/* ── Canvas: tablero claro, barras flotantes en píldora, pasteles ──── */
+.canvas-root { background: color-mix(in srgb, var(--fg) 2.2%, var(--bg)); }
+.canvas-pan-area, .macwin.dark .canvas-pan-area { background-image: radial-gradient(circle, color-mix(in srgb, var(--fg) 15%, var(--bg)) 1px, transparent 1.3px); }
+.cv-dock, .cv-actions, .cv-zoom { border-radius: var(--radius-pill) !important; box-shadow: var(--shadow-float) !important; border: 0 !important; background: var(--bg) !important; }
+.cv-dock { padding: 6px 8px; gap: 4px; }
+.cv-actions { padding: 4px 8px; }
+.cv-tool, .cv-zbtn, .cv-zval { border-radius: var(--radius-pill) !important; }
+.cv-tool:hover { background: color-mix(in srgb, var(--fg) 7%, transparent); }
+.cv-tool.on { background: var(--accent); color: var(--accent-fg); }
+.cv-sep { background: var(--line); }
+.cv-zval { font-family: var(--font-ui); font-weight: 500; }
+.cv-minimap { border-radius: var(--radius-lg); box-shadow: var(--shadow-float); }
+.canvas-root .canvas-style-bar, .canvas-root .canvas-sel-bar { border-radius: var(--radius-xl); box-shadow: var(--shadow-float); }
+.canvas-root .canvas-style-swatch.on { border-color: var(--fg); }
+.canvas-tpl-title { font-family: var(--font-ui); font-weight: 600; letter-spacing: -0.03em; font-size: 28px; }
+.canvas-tpl-card, .macwin.dark .canvas-tpl-card { border-radius: var(--radius-xl); border-color: var(--line); padding: 16px 16px 14px; }
+.canvas-tpl-card:hover { border-color: var(--fg); box-shadow: var(--shadow-float); }
+.canvas-tpl-icon { background: color-mix(in srgb, var(--fg) 6%, transparent); color: var(--fg); border-radius: var(--radius); }
+.canvas-group { border-style: solid !important; border-width: 1px !important; border-radius: var(--radius-xl) !important; }
+.canvas-group-head { border-bottom-style: solid !important; }
+.canvas-node { border-radius: var(--radius-lg) !important; }
+.canvas-find, .cs-timer, .cs-vote { border-radius: var(--radius-pill); }
+.canvas-find input { border-radius: var(--radius-pill); }
+
+/* «+ Etiqueta» y «Añadir propiedad»: sin caja; aparecen al pasar por la cabecera (como «Add icon» en AFFiNE). */
+.blk-tag-add, .blk-prop-add { border: 0 !important; background: transparent !important; color: var(--faint) !important; padding: 2px 6px !important; border-radius: var(--radius-sm) !important; }
+.blk-tag-add:hover, .blk-prop-add:hover { background: var(--hover) !important; color: var(--muted) !important; }
+.blk-tags.empty { opacity: 0; transition: opacity .15s ease; }
+.cm-blk-head:hover .blk-tags.empty, .blk-page-head:hover ~ .blk-props .blk-tags.empty, .blk-props:hover .blk-tags.empty, .md-render:hover > .blk-props .blk-tags.empty, .blk-tags.empty:hover, .blk-tags.empty:focus-within { opacity: 1; }
+
+/* Código en línea DENTRO de títulos: sin caja; mismo tamaño y peso que el
+   título, solo monoespaciado y un tono más suave (antes salía un recuadro
+   gris enorme, p. ej. «(rama `exp2`)»). */
+.md-render .md-h code, .cm-host .cm-blk-editor .cm-line[class*="cm-lp-h"] .cm-lp-code {
+  background: transparent !important; border: 0 !important; padding: 0 !important;
+  font-size: 0.92em !important; font-weight: inherit !important; color: color-mix(in srgb, var(--fg) 78%, var(--bg)) !important;
+}
+
+/* Desplegables de los diálogos (compartir, permisos, caducidad…): como los campos de texto. */
+.vault-share-body select, .vault-share-invite select, .sync-modal select {
+  height: 34px; padding: 0 30px 0 10px; font: 500 13px var(--font-ui); color: var(--fg);
+  border: 1px solid var(--line); border-radius: var(--radius); background-color: var(--bg);
+  appearance: none; -webkit-appearance: none; cursor: pointer; min-width: 130px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237A7A7A' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat !important; background-position: right 9px center !important; background-size: 14px !important;
+}
+.vault-share-body select, .vault-share-invite select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237A7A7A' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") !important;
+}
+/* La etiqueta del enlace ocupa su propia fila; permiso, caducidad y botón debajo. */
+.vault-share-invite > .sync-input:first-child { flex: 1 1 100% !important; }
+.vault-share-invite > select { flex: 1 1 0 !important; }
+.vault-share-body select:hover, .vault-share-invite select:hover { border-color: color-mix(in srgb, var(--line) 50%, var(--fg)); }
+.vault-share-body select:focus, .vault-share-invite select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+.vault-share-invite .sync-input, .vault-share-body input[type="datetime-local"] {
+  height: 34px; box-sizing: border-box; font: 400 13px var(--font-ui) !important; border: 1px solid var(--line) !important;
+  border-radius: var(--radius) !important; background: var(--bg) !important; color: var(--fg) !important;
+}
+.vault-share-invite { gap: 8px !important; align-items: center; }
+
+/* Avatar del workspace: glifo generativo (ui/shell/WsGlyph.jsx), sin fondo ni letra. */
+.sh-ws-avatar { background: transparent !important; padding: 0 !important; overflow: hidden; }
+.sh-rail-ws { background: transparent !important; padding: 0 !important; overflow: hidden; }
+.sh-rail-ws:hover svg, .sh-ws:hover .sh-ws-avatar svg { filter: saturate(1.15) brightness(1.04); }
+
+/* ── Portadas de nota ──────────────────────────────────────────────── */
+.blk-cover { position: relative; height: 200px; border-radius: 12px; margin: 0 0 18px; }
+.cm-blk-head.has-cover { padding-top: 4px; }
+.cm-blk-head .blk-cover { margin-bottom: 18px; }
+/* Con icono: medio icono encima de la portada (como Notion). */
+.blk-cover + .blk-page-head .blk-page-icon.has, .cm-blk-head.has-cover .blk-page-icon.has { margin-top: -58px; }
+.blk-cover + .blk-page-head, .cm-blk-head.has-cover .blk-head-row { position: relative; z-index: 1; padding-left: 16px; }
+.blk-cover + .blk-page-head .blk-page-icon.has, .cm-blk-head.has-cover .blk-page-icon.has { filter: drop-shadow(0 2px 6px rgba(0,0,0,.18)); }
+.blk-cover-tools { position: absolute; right: 12px; bottom: 12px; display: flex; gap: 6px; opacity: 0; transition: opacity .15s ease; }
+.blk-cover:hover .blk-cover-tools { opacity: 1; }
+.blk-cover-tools button { height: 26px; padding: 0 10px; border: 0; border-radius: var(--radius); background: rgba(255,255,255,.88); color: #141414; font: 500 12px var(--font-ui); cursor: pointer; backdrop-filter: blur(6px); }
+.blk-cover-tools button:hover { background: #fff; }
+.blk-head-row { display: flex; align-items: flex-end; gap: 8px; }
+.blk-cover-add { border: 0; background: transparent; color: var(--faint); font: 400 13px var(--font-ui); padding: 3px 8px; border-radius: var(--radius-sm); cursor: pointer; opacity: 0; transition: opacity .15s ease; }
+.blk-page-head:hover .blk-cover-add, .cm-blk-head:hover .blk-cover-add, .md-render:hover > .blk-page-head .blk-cover-add { opacity: 1; }
+.blk-cover-add:hover { background: var(--hover); color: var(--muted); }
+.blk-page-head { display: flex; align-items: flex-end; gap: 8px; }
+.blk-coverpop { width: 328px; padding: 10px !important; }
+.blk-cover-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; margin: 6px 0 8px; }
+.blk-cover-sw { height: 36px; border: 0; border-radius: var(--radius); cursor: pointer; box-shadow: inset 0 0 0 1px rgba(0,0,0,.06); }
+.blk-cover-sw:hover { transform: translateY(-1px); box-shadow: inset 0 0 0 1px rgba(0,0,0,.12), 0 2px 6px rgba(0,0,0,.12); }
+.blk-cover-sw.on { box-shadow: 0 0 0 2px var(--accent); }
+.blk-cover-actions { display: flex; justify-content: space-between; border-top: 1px solid var(--line); padding-top: 8px; }
+
+/* Propiedades vacías: una sola fila discreta (+ Etiqueta · + Añadir propiedad)
+   que aparece al pasar el ratón; antes ocupaban dos filas (≈60 px) siempre. */
+.blk-props.empty { display: flex !important; align-items: center; gap: 2px; height: 26px; margin: -6px 0 4px !important; opacity: 0; transition: opacity .15s ease; }
+.blk-props.empty .blk-tags.empty { opacity: 1 !important; display: inline-flex; }
+.blk-props.empty:hover, .blk-props.empty:focus-within, .md-h1:hover + .blk-props.empty, .blk-page-title:hover + .blk-props.empty { opacity: 1; }
+.blk-props.empty .blk-prop-add { margin: 0 !important; }
+
+/* ── Esquema flotante (panel derecho cerrado) ─────────────────────── */
+.fo { position: absolute; right: 14px; top: 120px; z-index: 20; display: flex; flex-direction: row-reverse; align-items: flex-start; gap: 10px; }
+.fo-lines { display: flex; flex-direction: column; align-items: flex-end; gap: 9px; padding: 8px 4px; cursor: pointer; }
+.fo-lines i { display: block; height: 2px; border-radius: 2px; background: color-mix(in srgb, var(--fg) 22%, transparent); transition: background .15s, width .15s; }
+.fo-lines i.on { background: var(--fg); }
+.fo-card {
+  width: 240px; max-height: 60vh; overflow: auto; padding: 6px; border-radius: var(--radius-lg);
+  background: var(--bg); box-shadow: var(--shadow-pop); display: flex; flex-direction: column; gap: 1px;
+}
+.fo-item { text-align: left; border: 0; background: transparent; color: var(--muted); font: 400 13px/1.35 var(--font-ui); padding: 5px 8px; border-radius: var(--radius-sm); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fo-item:hover { background: var(--hover); color: var(--fg); }
+.fo-item.on { color: var(--fg); font-weight: 500; }
+.fo-item.lvl-1 { padding-left: 20px; }
+.fo-item.lvl-2 { padding-left: 32px; font-size: 12.5px; }
+
+/* ── Inicio: tarjetas recientes con banda de portada e icono encima ── */
+.hm-card { padding: 0 !important; overflow: hidden; display: flex !important; flex-direction: column; align-items: stretch !important; text-align: left; }
+.hm-card-cover { display: block; height: 56px; background: color-mix(in srgb, var(--fg) 4%, var(--bg)); border-bottom: 1px solid var(--line); }
+.hm-card.has-cover .hm-card-cover { border-bottom: 0; }
+.hm-card .hm-card-ic { margin: -16px 0 8px 14px !important; box-shadow: 0 0 0 3px var(--bg); position: relative; }
+.hm-card .hm-card-title, .hm-card .hm-sub { padding: 0 14px; }
+.hm-card .hm-sub { padding-bottom: 12px; }
+
+/* ── Papelera ──────────────────────────────────────────────────────── */
+.trash-backdrop { position: fixed; inset: 0; z-index: 400; background: rgba(0,0,0,.28); display: flex; align-items: flex-start; justify-content: center; padding-top: 12vh; }
+.trash-modal { width: 560px; max-height: 70vh; display: flex; flex-direction: column; background: var(--bg); color: var(--fg); border-radius: 12px; box-shadow: var(--shadow-pop); overflow: hidden; }
+.trash-head { display: flex; align-items: flex-start; justify-content: space-between; padding: 18px 20px 12px; border-bottom: 1px solid var(--line); }
+.trash-title { font: 600 16px var(--font-ui); }
+.trash-sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.trash-close { border: 0; background: transparent; color: var(--muted); font-size: 20px; cursor: pointer; border-radius: var(--radius-sm); width: 28px; height: 28px; }
+.trash-close:hover { background: var(--hover); color: var(--fg); }
+.trash-empty { padding: 40px 20px; text-align: center; color: var(--muted); font-size: 14px; }
+.trash-list { list-style: none; margin: 0; padding: 6px; overflow: auto; }
+.trash-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--radius); }
+.trash-row:hover { background: var(--hover); }
+.trash-ic { width: 22px; text-align: center; }
+.trash-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.trash-name { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trash-meta { font-size: 12px; color: var(--muted); }
+.trash-btn { height: 28px; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); color: var(--fg); font: 500 12.5px var(--font-ui); cursor: pointer; }
+.trash-btn:hover { background: var(--hover); }
+.trash-btn.danger { color: #D93025; }
+.trash-foot { padding: 10px 16px; border-top: 1px solid var(--line); display: flex; justify-content: flex-end; }
+
+/* ── Canvas: buscar ────────────────────────────────────────────────── */
+.canvas-find { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 60; display: flex; align-items: center; gap: 4px; padding: 6px; background: var(--bg); border-radius: var(--radius-lg); box-shadow: var(--shadow-pop); }
+.canvas-find input { width: 240px; height: 30px; border: 1px solid var(--line); border-radius: var(--radius); padding: 0 10px; font: 400 13.5px var(--font-ui); background: var(--bg); color: var(--fg); outline: none; }
+.canvas-find input:focus { border-color: var(--accent); }
+.canvas-find-n { min-width: 64px; text-align: center; font-size: 12px; color: var(--muted); }
+.canvas-find button { width: 28px; height: 28px; border: 0; background: transparent; color: var(--muted); border-radius: var(--radius-sm); cursor: pointer; font-size: 15px; }
+.canvas-find button:hover:not(:disabled) { background: var(--hover); color: var(--fg); }
+.canvas-find button:disabled { opacity: .35; cursor: default; }
+.canvas-find-hit { position: absolute; border: 2px solid color-mix(in srgb, #F5B400 70%, transparent); border-radius: 10px; pointer-events: none; z-index: 40; background: color-mix(in srgb, #F5B400 8%, transparent); }
+.canvas-find-hit.on { border-color: #F5B400; box-shadow: 0 0 0 4px color-mix(in srgb, #F5B400 25%, transparent); }
+
+/* ── Canvas: temporizador y votación ───────────────────────────────── */
+.canvas-session { position: absolute; top: 12px; left: 16px; z-index: 60; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.cs-timer, .cs-vote { display: flex; align-items: center; gap: 6px; padding: 6px 8px 6px 12px; background: var(--bg); border-radius: var(--radius-lg); box-shadow: var(--shadow-pop); font: 500 13px var(--font-ui); color: var(--fg); }
+.cs-time { font: 600 22px var(--font-ui); font-variant-numeric: tabular-nums; min-width: 66px; letter-spacing: -0.02em; }
+.cs-timer.paused .cs-time { color: var(--muted); }
+.cs-timer.done { animation: cs-pulse 1s ease-in-out infinite; }
+.cs-timer.done .cs-time { color: #D93025; }
+@keyframes cs-pulse { 50% { box-shadow: 0 0 0 6px color-mix(in srgb, #D93025 25%, transparent), var(--shadow-pop); } }
+.cs-timer button, .cs-vote button { height: 28px; min-width: 28px; padding: 0 8px; border: 0; border-radius: var(--radius); background: var(--hover); color: var(--fg); font: 500 12.5px var(--font-ui); cursor: pointer; }
+.cs-timer button:hover, .cs-vote button:hover { background: color-mix(in srgb, var(--fg) 12%, transparent); }
+.canvas-vote { position: absolute; z-index: 45; min-width: 30px; height: 30px; padding: 0 8px; border-radius: 15px; border: 2px solid var(--bg); background: var(--accent); color: var(--accent-fg); font: 600 13px var(--font-ui); cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,.18); }
+.canvas-vote:not(.mine):not(.result) { background: var(--bg); color: var(--accent); border-color: var(--accent); }
+.canvas-vote.result { background: #F5B400; color: #141414; cursor: default; }
+
+/* Ajustes y Calendario ya tienen su propia cabecera: la barra superior no
+   ocupa fila; solo quedan los controles de ventana flotando arriba a la
+   derecha (Windows/Linux). */
+.shell-main { position: relative; }
+.sh-top.sh-top-bare {
+  position: absolute; top: 0; right: 0; left: auto; z-index: 40; margin: 0;
+  height: 36px; padding: 0 6px; border: 0 !important; border-radius: 0; background: transparent;
+}
+.sh-top.sh-top-bare .sh-crumb, .sh-top.sh-top-bare .sh-top-side, .sh-top.sh-top-bare .sh-navarrows { display: none; }
+.sh-top.sh-top-bare:not(:has(.winctl)) { display: none; }
+
+/* ═══ Modales y diálogos (2026-11-12) ═══ */
+.trash-modal, .history-modal, .vault-share-modal, .audit-modal { border-radius: var(--radius-card) !important; box-shadow: var(--shadow-pop) !important; border: 0 !important; }
+.trash-head { padding: 22px 24px 14px; border-bottom-color: var(--line); }
+.trash-title { font-size: 18px; font-weight: 600; letter-spacing: -0.02em; }
+.trash-close { border-radius: 999px; }
+.trash-row { border-radius: var(--radius); }
+.trash-btn { height: 32px; padding: 0 14px; border-radius: 999px; border-color: transparent; background: color-mix(in srgb, var(--fg) 6%, transparent); }
+.trash-btn:hover { background: color-mix(in srgb, var(--fg) 10%, transparent); }
+.trash-btn.danger { color: #C2410C; }
+.trash-backdrop { background: rgba(17, 24, 28, .32); }
+.history-modal, .vault-share-modal, .audit-modal { background: var(--bg) !important; color: var(--fg) !important; }
+
+/* ── Página ↔ Canvas (1.2) ──────────────────────────────────────────────
+   El interruptor junto al título y el bloque de página dentro del canvas. */
+.sh-surface { margin: 0 8px 0 6px; flex: none; }
+.sh-surface .sh-seg-btn { padding: 0 !important; width: 34px; justify-content: center; }
+.sh-surface .sh-seg-btn svg { flex: none; }
+.sh-surface .sh-seg-btn.on { color: var(--accent) !important; }
+
+.canvas-node.canvas-node-page {
+  position: absolute; display: flex; flex-direction: column; overflow: hidden;
+  background: var(--bg); border: 1px solid var(--line) !important;
+  border-radius: var(--radius-lg) !important; box-shadow: var(--shadow-float);
+  padding: 0 !important;
+}
+.canvas-node.canvas-node-page.selected { box-shadow: 0 0 0 2px var(--accent), var(--shadow-float); }
+.canvas-page-head {
+  flex: none; height: 34px; display: flex; align-items: center; gap: 8px; padding: 0 12px;
+  border-bottom: 1px solid var(--line); cursor: grab; user-select: none;
+  background: color-mix(in srgb, var(--side) 60%, var(--bg));
+  font-family: var(--font-ui); font-size: 12.5px; color: var(--muted);
+}
+.canvas-page-head:active { cursor: grabbing; }
+.canvas-page-grip { letter-spacing: -2px; opacity: .5; font-size: 11px; }
+.canvas-page-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); font-weight: 600; }
+.canvas-page-tag {
+  flex: none; padding: 2px 8px; border-radius: var(--radius-pill);
+  background: var(--accent-soft, color-mix(in srgb, var(--accent) 14%, transparent)); color: var(--accent); font-size: 11px; font-weight: 600;
+}
+.canvas-page-body { position: relative; flex: 1; min-height: 0; cursor: text; }
+.canvas-page-body .cm-host { height: 100%; }
+.canvas-page-body .cm-editor { height: 100%; }
+.canvas-page-body .cm-scroller { overflow: auto !important; overscroll-behavior: contain; height: 100%; }
+.canvas-page-body .cm-content { padding: 18px 26px 40px !important; }
+
+/* Transición: mientras la cámara se aleja (entrar) o vuelve a la columna
+   (salir), lo que no es la página aparece o se desvanece y los mandos
+   del canvas esperan. Sólo opacidad: la cámara la mueve el transform del
+   mundo, sin relayout. */
+.canvas-root.canvas-surface-in .canvas-node:not(.canvas-node-page),
+.canvas-root.canvas-surface-in .canvas-group,
+.canvas-root.canvas-surface-in .canvas-edges { animation: cvSurfaceFadeIn 420ms cubic-bezier(.2, .7, .2, 1) both; }
+.canvas-root.canvas-surface-out .canvas-node:not(.canvas-node-page),
+.canvas-root.canvas-surface-out .canvas-group,
+.canvas-root.canvas-surface-out .canvas-edges { opacity: 0; transition: opacity 260ms ease; }
+.canvas-root.canvas-surface-in .cv-dock, .canvas-root.canvas-surface-in .cv-actions, .canvas-root.canvas-surface-in .cv-zoom { animation: cvSurfaceFadeIn 420ms ease both; animation-delay: 120ms; }
+.canvas-root.canvas-surface-out .cv-dock, .canvas-root.canvas-surface-out .cv-actions, .canvas-root.canvas-surface-out .cv-zoom { opacity: 0; transition: opacity 180ms ease; }
+.canvas-root.canvas-surface-in .canvas-node-page .canvas-page-head,
+.canvas-root.canvas-surface-out .canvas-node-page .canvas-page-head { opacity: 0; }
+.canvas-node-page .canvas-page-head { transition: opacity 220ms ease; }
+@keyframes cvSurfaceFadeIn { from { opacity: 0; } to { opacity: 1; } }
+.reduce-motion .canvas-root[class*="canvas-surface-"] * { animation: none !important; transition: none !important; }
+@keyframes aiPopIn { from { opacity: 0; transform: translateY(4px) scale(.985); } to { opacity: 1; transform: none; } }
+@keyframes aiCaret { 50% { opacity: 0; } }
+@keyframes aiDot { 40% { opacity: 1; transform: translateY(-2px); } }
+.ai-msg { display: flex; flex-direction: column; gap: 4px; }
+
+/* ── Buscar en la nota / el canvas (Ctrl/⌘ F, 1.2): barra fina arriba ── */
+.macwin .edinot-search, .edinot-search {
+  position: sticky; top: 10px; bottom: auto; right: auto; left: auto;
+  margin: 0 auto 12px; width: min(540px, calc(100% - 24px)); z-index: 40;
+  background: var(--bg); color: var(--fg);
+  border: 0; border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-pop);
+  backdrop-filter: none; -webkit-backdrop-filter: none;
+  padding: 3px 6px 3px 10px; font: 400 13px var(--font-ui);
+  animation: es-drop .14s cubic-bezier(.2,.7,.2,1);
+}
+.macwin.dark .edinot-search { background: var(--bg-elev, var(--bg)); color: var(--fg); border: 0; }
+@keyframes es-drop { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+.edinot-search .es-row { padding: 1px 0; gap: 4px; }
+.edinot-search .es-row-replace { border-top: 1px solid var(--line); padding-top: 4px; margin-top: 2px; }
+.edinot-search input.es-find, .edinot-search input.es-replace { font: 400 13.5px var(--font-ui); height: 28px; color: var(--fg); }
+.macwin.dark .edinot-search input.es-find, .macwin.dark .edinot-search input.es-replace { color: var(--fg); }
+.edinot-search .es-count { font-size: 12px; min-width: 56px; white-space: nowrap; }
+.edinot-search .es-count.zero { color: var(--danger, #b04848); }
+.edinot-search .es-nav { background: transparent; gap: 2px; }
+.edinot-search .es-icon-btn { width: 26px; height: 26px; border-radius: var(--radius-pill); }
+.edinot-search .es-icon-btn:disabled { opacity: .35; cursor: default; }
+.edinot-search .es-icon-btn:hover:not(:disabled) { background: var(--hover, rgba(0,0,0,.06)); color: var(--fg); }
+.edinot-search .es-toggle { border-radius: var(--radius-pill); height: 24px; }
+.edinot-search .es-divider { background: var(--line); }
+/* En el editor: dentro del panel superior de CodeMirror (ya fijo arriba). */
+.cm-panels .edinot-search { position: relative; top: auto; margin-top: 8px; }
+/* En Leer: fija arriba mientras se desplaza la nota. */
+.docwrap > .edinot-search-read { margin-top: 4px; }
+/* En el canvas: arriba, centrada, sobre el lienzo. */
+.canvas-root .canvas-find.edinot-search { position: absolute; top: 12px; left: 0; right: 0; margin: 0 auto; transform: none; z-index: 60; display: block; gap: 0; }
+.canvas-root .canvas-find.edinot-search input { width: auto; border: 0; padding: 0 4px; background: transparent; border-radius: 0; }
+/* Coincidencias pintadas sin tocar el HTML (CSS Custom Highlight API). */
+::highlight(edinot-find), ::highlight(edinot-cfind) { background-color: color-mix(in srgb, #f5c542 45%, transparent); color: inherit; }
+::highlight(edinot-find-current), ::highlight(edinot-cfind-current) { background-color: #f5a623; color: #111; }
+.cm-editor .cm-searchMatch { background-color: color-mix(in srgb, #f5c542 45%, transparent); outline: 0; }
+.cm-editor .cm-searchMatch.cm-searchMatch-selected { background-color: #f5a623; color: #111; }
+.canvas-root .canvas-find.edinot-search { left: 12px; right: auto; margin: 0; width: min(420px, calc(100% - 560px)); min-width: 300px; }
+
+/* ── Barra lateral 1.2: corta, con secciones que se pliegan ─────────────────
+   Arriba lo fijo (Buscar y la navegación), en medio lo que se desplaza (Favoritos,
+   Organizar, Etiquetas, Colecciones) y abajo «Otros», Ajustes y la cuenta. */
+.sh-navs-top { flex: none; display: flex; flex-direction: column; gap: 1px; padding: 0 0 4px; }
+.sh-nav-search {
+  margin: 0 0 4px; background: color-mix(in srgb, var(--bg) 52%, transparent) !important; color: var(--muted) !important;
+  box-shadow: var(--shadow-pill); font-weight: 400 !important;
+}
+.sh-nav-search:hover { background: var(--pill-bg) !important; color: var(--fg) !important; }
+.sh-nav-search .sh-kbd { margin-left: auto; }
+.sh-nav-search .sh-nav-label { font-size: 13.5px; }
+.sh-side-scroll .sh-sec-head { padding-top: 12px !important; }
+.sh-side-scroll > .sh-sec:first-child .sh-sec-head { padding-top: 6px !important; }
+.sh-sec-toggle { font-weight: 500; }
+.sh-sec-head-row .sh-iconbtn-sm { width: 26px; height: 26px; }
+.sh-tagrow .sh-tree-ic svg, .sh-colrow .sh-tree-ic svg { opacity: .6; }
+.sh-tagrow, .sh-colrow, .sh-loose { padding-left: 8px; }
+.sh-tagrow .sh-tree-label, .sh-colrow .sh-tree-label { font-size: 13.5px; }
+.sh-loose { color: var(--muted); }
+.sh-loose .sh-tree-count { opacity: .9; }
+.sh-empty-quiet { padding: 4px 12px 6px; font-size: 12.5px; }
+.sh-side-foot { flex: none; gap: 1px; padding-top: 2px; }
+.sh-side-foot .sh-foot-head { padding: 8px 12px 4px !important; }
+.sh-others { display: flex; flex-direction: column; gap: 1px; }
+.sh-others .sh-nav { height: 34px !important; min-height: 34px !important; font-weight: 400 !important; }
+.sh-nav .sh-nav-chev { margin-left: 2px; color: var(--faint); opacity: 1; }
+.sh-nav.open { color: var(--fg); }
+.sh-others .sh-tpl-list { max-height: 150px; overflow-y: auto; margin-bottom: 2px; }
+.sh-nav-settings { margin-top: 2px; }
+/* Menos alto fijo arriba y abajo: lo que se desplaza (las carpetas) es lo que importa. */
+.sh-navs-top .sh-nav { height: 35px !important; min-height: 35px !important; }
+.sh-navs-top .sh-nav-search { height: 36px !important; min-height: 36px !important; }
+.sh-others .sh-nav, .sh-nav-settings { height: 32px !important; min-height: 32px !important; }
+.sh-side-foot .sh-account { padding-top: 4px; padding-bottom: 2px; }
+/* Poco alto: filas algo más bajas para que la parte que se desplaza no se quede sin sitio. */
+@media (max-height: 760px) {
+  .sh-navs-top .sh-nav, .sh-others .sh-nav, .sh-nav-settings { height: 32px !important; min-height: 32px !important; }
+  .sh-tree-row, .sh-fav { height: 30px !important; min-height: 30px !important; }
+}
+
+/* ── Barra superior estrecha (1.2): se pliega según SU ancho, no el de la
+   ventana (la barra lateral y el panel se lo comen). El título nunca queda
+   tapado: Compartir y Leer/Editar siguen en «…» y en el desplegable de modo. */
+.sh-top { container: shtop / inline-size; }
+.sh-crumb { min-width: 56px; flex: 1 1 auto; }
+@container shtop (max-width: 760px) {
+  .sh-save, .sh-crumb-part { display: none; }
+  .sh-top .sh-btn .sh-btn-label { display: none; }
+  .sh-top .sh-btn { padding: 0 10px !important; }
+}
+@container shtop (max-width: 620px) {
+  .sh-top-right .sh-seg > .sh-seg-btn:not(.on):not(.sh-seg-more) { display: none; }
+  .sh-top-right .sh-seg-btn { padding: 0 10px !important; }
+  .sh-top .sh-presence { display: none; }
+  .sh-top .sh-navarrows { display: none; }
+}
+@container shtop (max-width: 500px) {
+  .sh-top-right .sh-seg > .sh-seg-btn:not(.sh-seg-more) { display: none; }
+  .sh-top-right > .sh-btn { display: none; }
+  .sh-top { gap: 4px; }
+  .sh-top-right { gap: 2px; }
+}
+/* Ventana estrecha: el panel flota sobre la nota; que se note que flota. */
+@media (max-width: 1080px) {
+  .shell-content > .sh-ctx { box-shadow: -14px 0 32px -12px rgba(17, 24, 28, .22) !important; border-left: 1px solid var(--line) !important; }
+}
+
+/* Barra de formato sobre la selección: desde el rediseño tiene fondo claro,
+   así que el texto, el separador y el hover siguen al tema (antes eran los de
+   la pastilla oscura y en tema claro los botones casi no se veían). */
+.blk-bubble { color: var(--fg) !important; }
+.blk-bubble .blk-bb-btn:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); }
+.blk-bubble .blk-bb-sep { background: color-mix(in srgb, var(--fg) 14%, transparent); }
+.macwin:not(.dark) .blk-bubble .blk-bb-btn.ai { color: #B4532A; }
+
+/* ═══ Barra lateral 1.2.2 ═══════════════════════════════════════════════
+   Pie en UNA fila (Ajustes · «Actualizar» · sincronización), «Otros» como
+   última sección del cuerpo y barra encogida completa (+, Más, pie fijo). */
+.sh-side-foot { flex-direction: row !important; align-items: center !important; gap: 4px !important; padding: 6px 0 0 !important; }
+.sh-side-foot .sh-nav-settings { flex: 1 1 auto; min-width: 0; margin-top: 0; }
+.sh-sync-btn {
+  flex: none; width: 30px; height: 30px; padding: 0; border: 0; border-radius: var(--radius-pill); background: transparent;
+  display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
+}
+.sh-sync-btn:hover { background: color-mix(in srgb, var(--bg) 55%, transparent); }
+.sh-sync-btn .sh-sync-dot { width: 9px; height: 9px; }
+.sh-upd-pill {
+  flex: none; height: 24px; padding: 0 10px 0 8px; border: 0; border-radius: 999px; cursor: pointer;
+  background: var(--accent); color: var(--accent-fg); font: inherit; font-size: 12px; font-weight: 600;
+  display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+}
+.sh-upd-pill:hover { filter: brightness(1.12); }
+.sh-upd-pill svg { color: var(--accent-fg); opacity: 1; }
+.sh-others { padding-bottom: 6px; }
+.sh-otherrow { padding-left: 8px; }
+.sh-otherrow .sh-tree-ic svg { opacity: .6; }
+.sh-otherrow .sh-nav-chev { margin-left: 2px; color: var(--faint); opacity: 1; flex: none; }
+.sh-others .sh-tpl-list { max-height: none; overflow: visible; }
+
+/* Barra encogida */
+.sh-side.sh-rail { padding: 14px 0 10px !important; gap: 4px; }
+.sh-rail-scroll {
+  flex: 1 1 auto; min-height: 0; width: 100%; overflow-y: auto; overflow-x: hidden; padding: 4px 0;
+  display: flex; flex-direction: column; align-items: center; gap: 4px; scrollbar-width: none;
+}
+.sh-rail-scroll::-webkit-scrollbar { display: none; }
+.sh-rail-sep { flex: none; width: 22px; height: 1px; margin: 4px 0; background: color-mix(in srgb, var(--fg) 14%, transparent); }
+.sh-rail-btn { flex: none; position: relative; }
+.sh-rail-btn:disabled { opacity: .4; cursor: default; }
+.sh-rail-foot { margin-top: 0; flex: none; gap: 4px; }
+.sh-rail-dot { position: absolute; top: 7px; right: 8px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--bg); }
+.sh-rail .sh-sync-btn { width: 38px; height: 22px; border-radius: 11px; }
+
+/* ═══ Campos de texto sin recuadro de foco (1.2.2) ═══════════════════════
+   El anillo de foco por teclado es para botones, filas y menús. En un campo
+   de texto (input de texto/búsqueda, textarea, contenteditable que no es el
+   editor) el contorno del navegador dibujaba un rectángulo feo dentro de su
+   propia caja (paleta Ctrl K, buscador de Ajustes, tablas…). Una sola regla:
+   se quita ahí y el foco se ve en el borde de la caja (más abajo). Botones,
+   filas y menús conservan su contorno. */
+body :is(
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="button"]):not([type="submit"]):not([type="color"]),
+  textarea,
+  [contenteditable="true"]:not(.cm-content),
+  [contenteditable=""]:not(.cm-content),
+  [contenteditable="plaintext-only"]
+):focus-visible { outline: none; }
+/* Señal de foco de los campos que no tenían más que el contorno: el borde de su caja en color de acento
+   (como ya hacen .sh-input-row y .blk-pop-input). La paleta, el menú de IA y la barra Ctrl+F viven en una caja
+   que ya se ve, así que no necesitan nada más; la celda en edición ya lleva su anillo de acento (db.css). */
+.db-search:focus-within { background: var(--bg); box-shadow: inset 0 0 0 1.5px var(--accent); }
+
+/* Aviso de actualización: el botón de acción usa el color de texto del acento (en oscuro el acento es blanco y el texto, también blanco, no se leía). */
+.update-banner-actions button:not(.update-banner-close) { color: var(--accent-fg, #fff); border-radius: var(--radius-pill, 999px); padding: 5px 12px; font-weight: 600; }
+/* ── Barra lateral: una sola cuadrícula ────────────────────────────────────
+   Todo lo que lleva icono lo pone a 12px del borde y su etiqueta a 38px
+   (icono 16 + 10 de hueco); los títulos de sección empiezan en esos 12px.
+   Los controles (contadores, «+», chevrones de plegar) van siempre a la
+   derecha. Las carpetas anidan sumando 16px por nivel (ver TreeRow). */
+.sh-side { --sb-x: 12px; --sb-ic: 16px; --sb-gap: 10px; --sb-r: 12px; }
+.sh-side .sh-nav, .sh-side .sh-nav-search {
+  padding-left: var(--sb-x) !important; padding-right: var(--sb-r) !important; gap: var(--sb-gap) !important;
+}
+.sh-side .sh-tree-row, .sh-side .sh-fav { gap: var(--sb-gap) !important; padding-right: var(--sb-r) !important; }
+.sh-side .sh-fav, .sh-side .sh-loose, .sh-side .sh-otherrow, .sh-side .sh-addrow, .sh-side .sh-tagrow, .sh-side .sh-colrow {
+  padding-left: var(--sb-x) !important;
+}
+.sh-side .sh-fav.sh-more { padding-left: calc(var(--sb-x) + var(--sb-ic) + var(--sb-gap)) !important; }
+.sh-side .sh-tree-ic { width: var(--sb-ic); }
+.sh-side .sh-tree-chev { width: 14px; margin-left: 2px; justify-content: center; }
+/* Cabeceras: título en la columna de iconos, chevron + contador + «+» a la derecha. */
+.sh-side .sh-sec-head { padding-left: var(--sb-x) !important; padding-right: 6px !important; }
+.sh-side .sh-sec-head-row h2 { display: flex; min-width: 0; }
+.sh-side .sh-sec-toggle {
+  flex: 1; justify-content: space-between; flex-direction: row-reverse; gap: 8px;
+  margin: 0; padding: 0; border-radius: 0; text-align: left;
+}
+.sh-side .sh-sec-head-row .sh-tree-count { padding-right: 4px; }
+/* «Nueva carpeta» / «Nueva nota» cuando no hay nada: una fila más, no un enlace suelto. */
+.sh-side .sh-addrow { color: var(--muted) !important; }
+.sh-side .sh-addrow:hover { color: var(--fg) !important; }
+.sh-side .sh-addrow .sh-tree-ic svg { opacity: .8; }
+.sh-side .sh-empty {
+  padding: 4px var(--sb-r) 2px calc(var(--sb-x) + var(--sb-ic) + var(--sb-gap)); gap: 2px; align-items: stretch;
+}
+.sh-side .sh-empty .sh-addrow { margin-left: calc(-1 * (var(--sb-ic) + var(--sb-gap))); width: calc(100% + var(--sb-ic) + var(--sb-gap)); }
+/* Inicio: pista de sincronización (se puede cerrar) */
+.hm-sync { display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap; margin: 0 0 22px; padding: 16px 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--side); }
+.hm-sync-text { flex: 1; min-width: 240px; }
+.hm-sync-text .hm-h3 { margin: 0 0 4px; }
+.hm-sync-p { margin: 0; font-size: 13px; line-height: 1.5; color: var(--muted); max-width: 62ch; }
+.hm-sync-btns { display: flex; align-items: center; gap: 14px; }

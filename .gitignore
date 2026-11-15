@@ -1,0 +1,21 @@
+node_modules/
+dist/
+release/
+*.log
+.DS_Store
+
+# Local secrets and data
+.env
+.env.*
+*.pem
+*.key
+
+# Local dev / scratch
+tmp/
+uploads/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.codex
