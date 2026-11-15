@@ -885,7 +885,7 @@ export function AnchorCommentPopover({ x, y, thread, memberEmails, aiAgents, onR
         {thread.map(c => (
           <div key={c.id} className={`anchor-popover-msg${c.parentId ? ' is-reply' : ''}`}>
             <div className="anchor-popover-author">
-              {c.author || 'user'} · {(c.ts || '').slice(11, 16)}
+              {commentAuthorLabel(c.author, 'user')} · {(c.ts || '').slice(11, 16)}
             </div>
             <div className="anchor-popover-text">{c.text}</div>
           </div>
@@ -901,7 +901,14 @@ export function AnchorCommentPopover({ x, y, thread, memberEmails, aiAgents, onR
   );
 }
 
-function AiCommentItem({ comment: c, depth = 0, children, onResolve, onDelete, onReply, onPostReply, memberEmails = [], aiAgents = [], liveAliases = [], onOpenThread, onFocusAnchor }) {
+// The local hub signs everything as local@edinot.local: show that as «You», not as an address.
+function commentAuthorLabel(author, fallback) {
+  const a = String(author || '');
+  if (!a) return fallback;
+  return /@edinot\.local$/i.test(a) ? t('cmt.you') : a;
+}
+
+function AiCommentItem({ comment: c, depth = 0, children, onResolve, onDelete, onReply, onPostReply, memberEmails = [], aiAgents = [], liveAliases = [], waitingAliases = [], onOpenThread, onFocusAnchor }) {
   useI18n();
   const [open, setOpen] = useState(false);
   const isQuestion = c.kind === 'question';
@@ -911,7 +918,7 @@ function AiCommentItem({ comment: c, depth = 0, children, onResolve, onDelete, o
          data-comment-id={c.id}
          style={depth ? { marginLeft: Math.min(depth, 4) * 14 } : undefined}>
       <div className="ai-comment-author">
-        {c.author || 'ai'}
+        {commentAuthorLabel(c.author, 'ai')}
         <span className="ai-comment-ts" title={c.ts ? new Date(c.ts).toLocaleString() : ''}>
           {' · '}{vmRelTime(Date.parse(c.ts)) || (c.ts || '').slice(11, 16)}
         </span>
@@ -929,7 +936,7 @@ function AiCommentItem({ comment: c, depth = 0, children, onResolve, onDelete, o
         <div className="ai-comment-replies">
           {c.replies.map(r => (
             <div key={r.id} className="ai-comment-reply">
-              <span className="ai-comment-reply-author">{r.author || 'user'}</span>
+              <span className="ai-comment-reply-author">{commentAuthorLabel(r.author, 'user')}</span>
               <CommentText text={r.text} />
             </div>
           ))}
@@ -970,6 +977,14 @@ function AiCommentItem({ comment: c, depth = 0, children, onResolve, onDelete, o
           <span className="ai-comment-live-spinner" />
           <span className="ai-comment-live-text">
             {liveAliases.map(a => '@' + a).join(', ')} {liveAliases.length === 1 ? t('cmt.thinking.one') : t('cmt.thinking.many')}
+          </span>
+        </div>
+      )}
+      {waitingAliases && waitingAliases.length > 0 && (
+        <div className="ai-comment-live ai-comment-wait">
+          <span className="ai-comment-wait-dot" />
+          <span className="ai-comment-live-text">
+            {t('cmt.waiting', { names: waitingAliases.map(a => '@' + a).join(', ') })}
           </span>
         </div>
       )}
@@ -6756,7 +6771,7 @@ function ConversationModal({ rootId, onClose, noteId, memberEmails = [], aiAgent
       <div key={node.id} className={`ai-comment${node.resolved ? ' ai-comment-resolved' : ''}`}
         style={{ marginLeft: Math.min(depth, 6) * 14 }}>
         <div className="ai-comment-author">
-          {node.author || 'user'} · {(node.ts || '').slice(11, 16)}
+          {commentAuthorLabel(node.author, 'user')} · {(node.ts || '').slice(11, 16)}
           {node.resolved ? ' · ✓' : ''}
         </div>
         <CommentText text={node.text} />
@@ -13479,21 +13494,25 @@ function EdinotApp() {
           if (!byParent.has(c.parentId)) byParent.set(c.parentId, []);
           byParent.get(c.parentId).push(c);
         }
-        const remoteRunningTasks = readAgentTasks(ydoc)
+        const remoteTasks = readAgentTasks(ydoc)
           .filter(t => t.noteId === active.id && ['running', 'pending', 'pending-offline'].includes(String(t.status || 'pending')));
+        // «Pensando» solo si alguien la ha reclamado (running); si no, está esperando a que un asistente la recoja.
         const remoteAliasesByRoot = new Map();
-        for (const t of remoteRunningTasks) {
+        const waitingAliasesByRoot = new Map();
+        for (const t of remoteTasks) {
           const rid = t.threadRootId || t.commentId;
           if (!rid) continue;
-          const set = remoteAliasesByRoot.get(rid) || new Set();
+          const bucket = String(t.status) === 'running' ? remoteAliasesByRoot : waitingAliasesByRoot;
+          const set = bucket.get(rid) || new Set();
           if (t.targetAlias) set.add(String(t.targetAlias));
-          remoteAliasesByRoot.set(rid, set);
+          bucket.set(rid, set);
         }
         const renderTree = (c, depth, threadRootId) => {
           const kids = byParent.get(c.id) || [];
           const rootId = threadRootId || c.id;
           const remoteAliases = Array.from(remoteAliasesByRoot.get(rootId) || []);
           const liveAliases = remoteAliases;
+          const waitingAliases = Array.from(waitingAliasesByRoot.get(rootId) || []);
           return (
             <AiCommentItem key={c.id} comment={c} depth={depth}
               onResolve={() => resolve(c.id)}
@@ -13504,7 +13523,8 @@ function EdinotApp() {
               aiAgents={knownAiAgents}
               onFocusAnchor={focusCommentAnchor}
               onOpenThread={!c.parentId ? () => setThreadRoot(c.id) : undefined}
-              liveAliases={!c.parentId ? liveAliases : []}>
+              liveAliases={!c.parentId ? liveAliases : []}
+              waitingAliases={!c.parentId ? waitingAliases : []}>
               {kids.map(k => renderTree(k, depth + 1, rootId))}
             </AiCommentItem>
           );

@@ -481,7 +481,7 @@ gesture of every task, not as a rare option.
     delivery surfaces so no client misses it.
 
 12. **AI mentions are assignments.** If \`get_active_context\`
-    returns \`pendingAgentTasks\` for your alias, handle them before
+    returns \`pendingAgentTasks\` for your alias or your kind, handle them before
     unrelated work: call \`claim_agent_task\`, perform the requested
     work, then \`complete_agent_task\` with the response that should
     be posted back to the originating comment thread.
@@ -4905,14 +4905,18 @@ server.tool(
   + '(answers the user typed into ask_inline questions you haven\'t acted on '
   + 'yet — MCP can\'t push, so check this every turn). After handling a '
   + 'reply, call resolve_comment or delete_comment so it stops appearing. '
-  + 'When `pendingAgentTasks` contains tasks for your alias, claim and complete '
-  + 'them before unrelated work.',
+  + 'When `pendingAgentTasks` contains tasks for your alias or for your kind (an @claude, '
+  + '@codex or @cursor mention), claim and complete them before unrelated work.',
   {},
   async () => withSession(async (s, cfg) => {
     const ctx = await s.getActiveContext();
     const identity = currentAgentIdentity(cfg);
-    const pendingAgentTasks = (ctx.pendingAgentTasks || [])
-      .filter(t => String(t.targetAlias || '').toLowerCase() === identity.alias);
+    // Same matching as list_agent_tasks: tasks addressed to this agent's own alias AND the shared
+    // @kind tasks (@claude, @codex, @cursor) any agent of its kind may pick up. Matching the alias alone
+    // hid every @claude mention, because those carry the shared tag and not `claude-<device>`.
+    const pendingAgentTasks = s.listAgentTasks({
+      alias: identity.alias, kind: identity.kind, status: ['pending', 'pending-offline', 'running'],
+    });
     let pinned = [];
     try { pinned = s.listPinnedContext() || []; } catch {}
     return json({

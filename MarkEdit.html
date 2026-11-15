@@ -2521,6 +2521,11 @@
     animation: agent-cli-spin 0.9s linear infinite;
   }
   .ai-comment-live-text { font-family: ui-monospace, monospace; }
+  /* A task nobody has picked up yet: a still dot, not a spinner (nothing is running). */
+  .ai-comment-wait .ai-comment-wait-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    border: 1.5px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  }
 
   /* Spinner shared by the live "@alias está pensando…" pill. */
   @keyframes agent-cli-spin { to { transform: rotate(360deg); } }
