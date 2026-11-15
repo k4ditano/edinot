@@ -389,7 +389,12 @@ async function startLocked({ dir, port, host, publicUrl, extraHosts, tls, renewC
         if (!vs.length || vs.length > 50 || !vs.every(v => /^[A-Za-z0-9_-]{1,64}$/.test(v))) return send(res, 400, { error: 'invalid scope: give 1 to 50 vault ids' });
         scope = { vaults: [...new Set(vs)], readOnly: !!body.scope.readOnly };
       }
-      const r = createPairing(body && body.url, scope);
+      // Address the new computer will use to reach this hub. Priority: an explicit one from an admin
+      // (`edinot pair --url`), then the PUBLIC address this hub was configured with, and only if it has
+      // none, the one the asking client happened to use (it may be a tunnel or a LAN address that
+      // other computers cannot reach — the reason it must not win over the configured one).
+      const asUrl = (v) => (typeof v === 'string' && /^https?:\/\/[^\s]+$/i.test(v.trim()) ? v.trim() : null);
+      const r = createPairing(asUrl(body && body.url) || publicUrl || asUrl(body && body.fallbackUrl) || null, scope);
       return r.error ? send(res, 429, { error: r.error }) : send(res, 200, r);
     }
     if (p === '/devices' && method === 'GET') {

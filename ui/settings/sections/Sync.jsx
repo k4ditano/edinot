@@ -94,10 +94,12 @@ export function SyncSection({ ctx }) {
   // ── Equipos del hub ──────────────────────────────────────────────────────
   const [devices, setDevices] = useState(null);       // null = cargando; [] = ninguno
   const [devErr, setDevErr] = useState(false);
+  // Old sync servers (the pre-1.3 cloud server) have no pairing at all: say so instead of failing.
+  const [pairUnsupported, setPairUnsupported] = useState(false);
   const loadDevices = useCallback(async () => {
     if (!loggedIn) { setDevices([]); return; }
     try { setDevices((await apiListDevices(config.httpUrl, config.token)).devices || []); setDevErr(false); }
-    catch { setDevices([]); setDevErr(true); }
+    catch (err) { setDevices([]); if (err && err.status === 404) setPairUnsupported(true); else setDevErr(true); }
   }, [loggedIn, config && config.httpUrl, config && config.token]);
   useEffect(() => { loadDevices(); }, [loadDevices]);
   const revoke = async (d) => {
@@ -118,7 +120,7 @@ export function SyncSection({ ctx }) {
     setPairErr(null);
     const scope = shareMode === 'some' ? { vaults: [...shareSel], readOnly: shareRO } : null;
     try { setPairing(await apiPairStart(config.httpUrl, config.token, config.httpUrl, scope)); }
-    catch (err) { setPairErr(err.message); }
+    catch (err) { if (err && err.status === 404) setPairUnsupported(true); else setPairErr(err.message); }
   };
   const vaultName = (id) => (vaults.find(v => v.id === id) || {}).name || id;
 
@@ -223,7 +225,7 @@ export function SyncSection({ ctx }) {
         <Group title={t('st.grp.devices')}>
           <Row {...rowProps('sync.devices')} stack>
             {devices === null && <div className="st-hint">…</div>}
-            {devices && devices.length === 0 && <div className="st-hint">{devErr ? t('st.sync.devicesError') : t('st.sync.noDevices')}</div>}
+            {devices && devices.length === 0 && !pairUnsupported && <div className="st-hint">{devErr ? t('st.sync.devicesError') : t('st.sync.noDevices')}</div>}
             {devices && devices.length > 0 && (
               <ul className="st-devices">
                 {devices.map(d => (
@@ -237,7 +239,11 @@ export function SyncSection({ ctx }) {
               </ul>
             )}
           </Row>
-          {mode === 'server' ? (
+          {pairUnsupported ? (
+            <Row {...rowProps('sync.addDevice', { help: '' })} last stack>
+              <Notice tone="info">{t('st.sync.noPairing')}</Notice>
+            </Row>
+          ) : mode === 'server' ? (
             <Row {...rowProps('sync.addDevice')} last stack>
               {!pairing && (
                 <div className="st-share">

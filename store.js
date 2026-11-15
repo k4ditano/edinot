@@ -711,8 +711,9 @@ export const apiListAuditEvents = (httpUrl, token, workspaceId, { kind, sinceTs,
 export const apiPairRedeem = (httpUrl, code, name) =>
   apiCall(httpUrl, '/pair/redeem', { method: 'POST', body: { code, name } });
 // Crear un código para emparejar otro equipo. `url` es la dirección con la que ese equipo llegará al hub.
-export const apiPairStart = (httpUrl, token, url, scope = null) =>
-  apiCall(httpUrl, '/pair/start', { method: 'POST', token, body: { url, ...(scope ? { scope } : {}) } });
+// `fallbackUrl` is only used if the hub has no public address of its own configured.
+export const apiPairStart = (httpUrl, token, fallbackUrl, scope = null) =>
+  apiCall(httpUrl, '/pair/start', { method: 'POST', token, body: { fallbackUrl, ...(scope ? { scope } : {}) } });
 export const apiListDevices = (httpUrl, token) => apiCall(httpUrl, '/devices', { token });
 export const apiRevokeDevice = (httpUrl, token, id) =>
   apiCall(httpUrl, `/devices/${encodeURIComponent(id)}`, { method: 'DELETE', token });
