@@ -12719,18 +12719,6 @@ function EdinotApp() {
     [filesMeta],
   );
   const notesById = useMemo(() => new Map(filesMeta.map(f => [f.id, f])), [filesMeta]);
-  const agentTasksAll = useMemo(() => readAgentTasks(ydoc), [metaV]);
-  // Identidad estable (stabilizeList) para no re-renderizar la barra lateral
-  // con cada escritura en yMeta (selección, modo…) que no toca las tareas.
-  const pendingTasksRef = useRef(null);
-  const pendingAgentTasks = useMemo(
-    () => (pendingTasksRef.current = stabilizeList(pendingTasksRef.current, agentTasksAll
-      .filter(tk => ['pending', 'pending-offline', 'running'].includes(String(tk.status || 'pending')))
-      .sort((a, b) => String(b.requestedAt || '').localeCompare(String(a.requestedAt || ''))))),
-    [agentTasksAll],
-  );
-  const agentsSig = knownAiAgents.map(a => `${a.alias}:${a.online ? 1 : 0}`).join('|');
-  const sidebarAgents = useMemo(() => knownAiAgents, [agentsSig]); // eslint-disable-line react-hooks/exhaustive-deps
   const editLogList = useMemo(() => (Array.isArray(yMeta.get('editLog')) ? yMeta.get('editLog') : []), [metaV]);
   const todayShortLabel = todayShortLabelCached(getLang());
   // El inicio muestra SOLO el vault en el que estás: sus eventos, notas recientes,
@@ -13184,13 +13172,6 @@ function EdinotApp() {
     updateNoteContentById(ev.noteId, lines.join('\n'));
   }, [isViewer, updateNoteContentById]);
 
-  const openAgentTask = useCallback((task) => {
-    if (!task) return;
-    if (task.noteId) setActiveId(task.noteId);
-    setCtxTab('comments');   // la tarea de un agente es un hilo de comentarios de la nota
-    setCtxPanelOpen(true);
-  }, [setActiveId, setCtxPanelOpen]);
-
   const toggleThemeLightDark = useCallback(() => {
     setThemeKey(theme.dark ? 'edinot' : 'edinotDark');
   }, [theme, setThemeKey]);
@@ -13292,7 +13273,6 @@ function EdinotApp() {
       inV.sort((a, b) => ((st[b.id] || {}).t || 0) - ((st[a.id] || {}).t || 0));
       if (inV[0] && view !== 'home') setActiveId(inV[0].id);
     },
-    openAgentTask,
     completeTask,
     setMode, toggleSidebar,
     togglePanel: () => setCtxPanelOpen(v => !v),
@@ -13646,8 +13626,6 @@ function EdinotApp() {
           externalFiles={externalFiles}
           todayLabel={todayShortLabel}
           dueCount={dueReminderCount}
-          agentTasks={pendingAgentTasks}
-          knownAgents={sidebarAgents}
           syncStatus={(syncConfigState && syncConfigState.token && !syncConfigState.hub) ? syncStatus : 'idle'}
           loggedIn={!!(syncConfigState && syncConfigState.token && !syncConfigState.hub)}
           defaultNoteId={defaultNoteId}

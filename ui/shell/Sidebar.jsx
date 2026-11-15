@@ -149,7 +149,7 @@ export const Sidebar = memo(function Sidebar(props) {
     collapsed, onToggleCollapsed, routeView, isMac, compact,
     workspace, vaults, activeVault, activeId,
     filesMeta, folders, templateFolderIds, canvasIds,
-    favorites, externalFiles, todayLabel, dueCount, agentTasks, knownAgents,
+    favorites, externalFiles, todayLabel, dueCount,
     databases = NO_LIST, tags = NO_LIST,
     syncStatus, loggedIn, defaultNoteId, readOnly, isWorkspaceOwner, actions: A,
     updateState = NO_UPDATE,
@@ -405,31 +405,6 @@ export const Sidebar = memo(function Sidebar(props) {
     setMenu({ anchor, items, label: t('shell.ws.switch') });
   };
 
-  const agentsMenu = (anchor) => {
-    const items = [{ type: 'head', label: t('shell.agents.pending') }];
-    if (!agentTasks.length) items.push({ label: t('shell.agents.none'), disabled: true });
-    for (const task of agentTasks.slice(0, 8)) {
-      items.push({
-        label: `@${task.targetAlias || task.targetKind || 'ia'} · ${baseName(task.noteName) || '—'}`,
-        hint: String(task.prompt || '').replace(/\s+/g, ' ').slice(0, 70),
-        icon: 'spark',
-        onSelect: () => A.openAgentTask(task),
-      });
-    }
-    if (knownAgents.length) {
-      items.push({ type: 'sep' }, { type: 'head', label: t('shell.agents.known') });
-      for (const a of knownAgents.slice(0, 8)) {
-        items.push({
-          label: '@' + a.alias, disabled: true,
-          hint: !a.online ? t('shell.agents.offline') : (a.launchable === false ? t('shell.agents.onlineManual') : t('shell.agents.online')),
-          icon: <span className={`sh-dot${a.online ? ' on' : ''}`} />,
-        });
-      }
-    }
-    items.push({ type: 'sep' }, { label: t('shell.agents.configure'), icon: 'settings', onSelect: () => A.openSettings('ai') });
-    setMenu({ anchor, items, label: t('shell.nav.agents') });
-  };
-
   // «+» de la barra encogida: nota, nota canvas, base de datos o desde plantilla.
   const templateItems = () => {
     const out = index.templates.map(tpl => ({ label: baseName(tpl.name), icon: 'template', onSelect: () => A.applyTemplate(tpl) }));
@@ -594,10 +569,6 @@ export const Sidebar = memo(function Sidebar(props) {
   // su nombre y, si hay varios, cuántos hay. Al cambiar de vault cambia todo lo de abajo.
   const wsName = activeVaultObj.name || t('shell.ws.local');
   const vaultSub = vaults.length > 1 ? t('shell.ws.vaultsCount', { n: vaults.length }) : '';
-  const pendingAgents = agentTasks.length;
-  // La app no tiene IA propia: «Agentes» solo aparece cuando hay una IA externa
-  // conectada por MCP o tareas pendientes para ella.
-  const showAgents = pendingAgents > 0 || (knownAgents && knownAgents.length > 0);
 
   // Cabecera de una sección que se pliega (chevron + nombre + cuántos hay).
   const secHead = (key, id, label, count) => (
@@ -647,7 +618,6 @@ export const Sidebar = memo(function Sidebar(props) {
           {railBtn('all', 'allnotes', t('shell.nav.all'), () => A.openAllNotes(), { on: routeView === 'all' })}
           {railBtn('today', 'today', t('shell.nav.today'), () => A.openToday(), { on: todayActive, title: t('shell.nav.today') + ' · ' + todayLabel })}
           {railBtn('cal', 'calendar', t('shell.nav.calendar'), () => A.openCalendar(), { on: routeView === 'calendar', badge: dueCount, title: withKbd(t('shell.nav.calendar'), 'calendar', isMac) })}
-          {showAgents && railBtn('agents', 'agents', t('shell.nav.agents'), (e) => agentsMenu(pt(e.currentTarget)), { badge: pendingAgents, popup: true })}
           <span className="sh-rail-sep" aria-hidden="true" />
           {railBtn('notes', 'folder', t('shell.sec.organize'), () => onToggleCollapsed(), { title: withKbd(t('shell.sidebar.expand'), 'sidebar', isMac) })}
           {railBtn('more', 'more', t('shell.rail.more'), (e) => moreMenu(pt(e.currentTarget)), { popup: true })}
@@ -697,8 +667,6 @@ export const Sidebar = memo(function Sidebar(props) {
         {navItem('cal', 'calendar', t('shell.nav.calendar'), () => A.openCalendar(),
           dueCount > 0 ? <span className="sh-badge" aria-label={t('cal.pill.due').replace('{n}', dueCount)}>{dueCount > 99 ? '99+' : dueCount}</span> : null,
           { on: routeView === 'calendar' })}
-        {showAgents && navItem('agents', 'agents', t('shell.nav.agents'), (e) => agentsMenu(e.currentTarget.getBoundingClientRect()),
-          pendingAgents > 0 ? <span className="sh-badge" aria-label={t('shell.agents.pendingN', { n: pendingAgents })}>{pendingAgents}</span> : null)}
       </nav>
 
       <div className="sh-side-scroll" ref={scrollRef}>
