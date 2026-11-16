@@ -116,7 +116,8 @@ function HeaderCell({ cx, ci, width }) {
 function DataCell({ cx, r, ci, row }) {
   const name = cx.headers[ci] || `Col ${ci + 1}`;
   const conf = cx.cols[name] || null;
-  const type = (conf && conf.type) || 'text';
+  const declared = (conf && conf.type) || 'text';
+  const type = declared === 'text' && cx.numericCols && cx.numericCols[ci] ? 'number' : declared;
   const raw = row[ci] == null ? '' : row[ci];
   const isSel = cx.sel && cx.sel.r === r && cx.sel.c === ci;
   const ed = cx.editing;

@@ -948,8 +948,17 @@ export function DatabaseBlock({ meta: propMeta, idx, ctxRef, ops, surface }) {
 
   // ── Contexto para las vistas ─────────────────────────────────────────
   const c0 = C();
+  // Una tabla Markdown no dice de qué tipo es cada columna: las que no tienen tipo y solo contienen números se muestran
+  // como números (alineadas a la derecha). Solo es presentación: no cambia el tipo guardado ni el texto de las celdas.
+  const numericCols = headers.map((h, ci) => {
+    if (ci === titleIdx) return false;
+    const conf = cols[h];
+    if (conf && conf.type && conf.type !== 'text') return false;
+    const vals = meta.rows.map(r => String(r[ci] == null ? '' : r[ci]).trim()).filter(Boolean);
+    return vals.length > 0 && vals.every(v => /^[-+]?(0|[1-9]\d*)([.,]\d+)?$/.test(v));
+  });
   const cx = {
-    meta, idx, headers, cols, directive: d, rows, visibleCols, titleIdx, hiddenSet, readOnly,
+    meta, idx, headers, cols, numericCols, directive: d, rows, visibleCols, titleIdx, hiddenSet, readOnly,
     // La columna título sólo se fija a la izquierda si es la primera visible.
     stickyCol: visibleCols[0] === titleIdx ? titleIdx : -1,
     optColors: d.optColors || null, label: t('db.label'),

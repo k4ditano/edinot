@@ -411,6 +411,9 @@ textarea.blk-pop-input { height: auto; padding: 8px 10px; resize: vertical; line
 .cm-host .cm-comment-anchor { background: color-mix(in srgb, #E8B931 26%, transparent); border-bottom: 2px solid color-mix(in srgb, #D69E12 70%, transparent); border-radius: 2px; cursor: pointer; }
 .md-render .md-math-block .katex-display { margin: 0; }
 .md-render .md-code-langsel { field-sizing: content; width: auto; max-width: 140px; padding: 2px 6px; }
+/* El botón «Copiar» es invisible hasta pasar el ratón pero ocupa sitio: con el orden normal dejaba el lenguaje a medio camino del borde.
+   Invertido, el lenguaje queda siempre en la esquina y «Copiar» aparece a su izquierda. */
+.md-render .md-codewrap .md-code-bar { flex-direction: row-reverse; }
 
 /* ── 1.2.1: barra de formato en el hueco estrecho de la nota ──────────── */
 /* Compacta: solo iconos (el texto queda en el tooltip). */
@@ -418,3 +421,7 @@ textarea.blk-pop-input { height: auto; padding: 8px 10px; resize: vertical; line
 /* Si ni así cabe, dos filas dentro del hueco de la nota. */
 .blk-bubble.wrap { flex-wrap: wrap; justify-content: center; row-gap: 2px; }
 .blk-bubble.wrap .blk-bb-sep { display: none; }
+
+/* Etiquetas #palabra en modo lectura: pastilla suave, no texto suelto. */
+.md-render .md-tag { display: inline-block; padding: 0 7px; margin: 0 1px; border-radius: 999px; font-size: 0.88em; line-height: 1.55;
+  color: var(--muted); background: color-mix(in srgb, var(--fg) 7%, transparent); white-space: nowrap; }

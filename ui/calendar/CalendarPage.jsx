@@ -885,7 +885,7 @@ export const CalendarPage = memo(function CalendarPage({
               { key: 'google', name: t('calp.cal.google'), meta: hasGoogle ? null : t('calp.cal.googleOff'), off: !hasGoogle }]
               .map(c => (
                 <div key={c.key} className="cp-cal">
-                  <label className="cp-cal-label">
+                  <label className="cp-cal-label" title={c.meta ? `${c.name} · ${c.meta}` : c.name}>
                     <input type="checkbox" checked={!prefs.hidden[c.key]} style={{ accentColor: calColor(c.key) }}
                       onChange={() => setPrefs(p => ({ ...p, hidden: { ...p.hidden, [c.key]: !p.hidden[c.key] } }))} />
                     <span className="cp-cal-name">{c.name}</span>

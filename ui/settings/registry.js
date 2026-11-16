@@ -31,7 +31,7 @@ export const sectionDesc = (id) => t(`st.sec.${id}.d`);
 const ROW_LIST = [
   ['about.version', 'about', 'versión version instalada installed acerca about edinot número number build'],
   ['about.updates', 'about', 'actualizar actualizaciones actualización update updates upgrade versión version nueva new buscar check comprobar descargar download instalar install reiniciar restart'],
-  ['about.site', 'about', 'web sitio website edinot.app página page'],
+  ['about.site', 'about', 'web sitio website github releases descargas downloads página page'],
   ['appearance.theme', 'appearance', 'tema theme claro light oscuro dark sistema system modo noche night'],
   ['appearance.moreThemes', 'appearance', 'más temas more themes sage cream paper sky rose lavender mint terra graphite midnight mocha plum colores'],
   ['appearance.accent', 'appearance', 'acento accent color colour personalizado custom'],

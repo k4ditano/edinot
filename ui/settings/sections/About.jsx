@@ -9,6 +9,9 @@ import { Icon } from '../../shell/icons.jsx';
 import { Row, Button } from '../controls.jsx';
 import { rowProps } from '../registry.js';
 
+// Dirección estable del proyecto: novedades (releases) y descargas, sea cual sea el alojamiento de la web.
+const REPO_URL = 'https://github.com/k4ditano/edinot/releases';
+
 function UpdatesRow() {
   useI18n();
   const [status, setStatus] = useState({ state: 'idle' });
@@ -223,9 +226,9 @@ export function AboutSection() {
       </Row>
       <UpdatesRow />
       <Row {...rowProps('about.site')} last>
-        <a className="ui-btn ui-btn-secondary" href="https://edinot.app" target="_blank" rel="noreferrer"
-          onClick={(e) => { if (window.electronAPI && window.electronAPI.openExternal) { e.preventDefault(); window.electronAPI.openExternal('https://edinot.app'); } }}>
-          edinot.app <Icon name="external" size={13} />
+        <a className="ui-btn ui-btn-secondary" href={REPO_URL} target="_blank" rel="noreferrer"
+          onClick={(e) => { if (window.electronAPI && window.electronAPI.openExternal) { e.preventDefault(); window.electronAPI.openExternal(REPO_URL); } }}>
+          github.com/k4ditano/edinot <Icon name="external" size={13} />
         </a>
       </Row>
     </>

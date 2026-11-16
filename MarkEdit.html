@@ -2243,14 +2243,14 @@
     padding: 5px 14px;
     border-radius: 999px;
     background: var(--accent);
-    color: #f6f8ef;
+    color: var(--accent-fg, #f6f8ef);   /* contraste con el acento del tema: con #f6f8ef fijo el texto desaparecía en oscuro */
     font-size: 12px;
     font-weight: 600;
     cursor: pointer;
-    transition: background 0.12s, transform 0.12s;
+    transition: background 0.12s, transform 0.12s, opacity 0.12s;
   }
-  .chat-composer-send:hover:not(:disabled) { background: #6b8d5d; }
-  .chat-composer-send:disabled { opacity: 0.4; cursor: default; }
+  .chat-composer-send:hover:not(:disabled) { filter: brightness(1.12); }
+  .chat-composer-send:disabled { opacity: 0.55; cursor: default; }
   .chat-composer-mentions {
     position: absolute;
     bottom: calc(100% - 4px);
@@ -2449,14 +2449,13 @@
     border-radius: 2px;
     cursor: pointer;
     position: relative;
-    text-decoration: underline wavy rgba(99, 91, 255, 0.65);
-    text-decoration-thickness: 1.5px;
-    text-underline-offset: 3px;
-    transition: text-decoration-color 0.12s, background 0.12s;
+    /* Resaltado amarillo con subrayado liso, igual que en edición: el ondulado morado se confundía con el corrector ortográfico. */
+    background: color-mix(in srgb, #E8B931 26%, transparent);
+    border-bottom: 2px solid color-mix(in srgb, #D69E12 70%, transparent);
+    transition: background 0.12s;
   }
   .md-render mark.comment-anchor:hover {
-    background: rgba(99, 91, 255, 0.10);
-    text-decoration-color: rgba(99, 91, 255, 0.95);
+    background: color-mix(in srgb, #E8B931 42%, transparent);
   }
   .macwin.dark .md-render mark.comment-anchor {
     text-decoration-color: rgba(155, 147, 255, 0.75);

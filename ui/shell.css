@@ -212,7 +212,7 @@ body { font-family: var(--font-ui); }
 .sh-side-foot .sh-iconbtn { margin-left: auto; width: 30px; height: 30px; }
 .sh-sync-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; display: inline-block; }
 .sh-sync-dot.sync-connected { background: var(--accent); }
-.sh-sync-dot.sync-connecting { background: #d8b04a; animation: sync-pulse 1.1s ease-in-out infinite; }
+.sh-sync-dot.sync-connecting, .sh-sync-dot.sync-syncing { background: #d8b04a; animation: sync-pulse 1.1s ease-in-out infinite; }
 .sh-sync-dot.sync-auth-failed, .sh-sync-dot.sync-error { background: #c8503f; }
 
 /* Carril (60px) */
@@ -297,8 +297,12 @@ body { font-family: var(--font-ui); }
 @media (max-width: 1100px) {
   .sh-save { display: none; }
 }
-@media (max-width: 900px) {
+/* Con la barra superior apretada (Guardado, Leer/Editar y botones comparten el hueco) los tramos de vault y carpeta se
+   quedaban en «D / P.. / Plan …»: por debajo de 1280px solo se muestra el título, que ahora se lee entero. */
+@media (max-width: 1280px) {
   .sh-crumb-part { display: none; }
+}
+@media (max-width: 900px) {
   .sh-btn span.sh-btn-label { display: none; }
 }
 
@@ -378,7 +382,14 @@ body { font-family: var(--font-ui); }
 
 /* Elementos flotantes que antes contaban con la barra de estado / sin panel */
 .macwin.ctx-open .ai-peer-chip, .macwin.ctx-open .upload-stack { right: 328px; }
-.ai-peer-chip, .upload-stack, .viewer-banner { bottom: 16px; }
+.upload-stack, .viewer-banner { bottom: 16px; }
+/* Esquina inferior derecha: el control de zoom del canvas, el chip del asistente y los avisos ya no se pisan; cada uno
+   se apila encima del anterior. --chip-b es donde empieza el chip; los avisos van sobre el chip si lo hay. */
+body { --chip-b: 16px; }
+body:has(.cv-zoom) { --chip-b: 72px; }
+.ai-peer-chip { bottom: var(--chip-b); }
+.reply-toasts { bottom: var(--chip-b); }
+body:has(.ai-peer-chip) .reply-toasts { bottom: calc(var(--chip-b) + 56px); }
 .agent-cli-toasts { left: calc(var(--side-w) + 16px); }
 .update-banner { top: 60px; }
 .macwin.ctx-open .reply-toasts, .macwin.ctx-open .reminder-banner { right: 328px; }

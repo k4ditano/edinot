@@ -157,3 +157,23 @@ test('edit_comment cambia el texto de un comentario y de una respuesta', async (
   assert.equal((await call('edit_comment', { id: 'nope', text: 'x' })).ok, false);
   assert.equal((await call('edit_comment', { id: c.id, text: '   ' })).ok, false);
 });
+
+const overlap = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+const anyOverlap = (nodes) => nodes.some((a, i) => nodes.slice(i + 1).some(b => overlap(a, b)));
+
+test('add_canvas_node sin posición no apila los nodos y auto_layout_canvas no los solapa', async () => {
+  await call('create_canvas', { name: 'Sin solapes' });
+  for (const t of ['Lanzamiento', 'Vídeo', 'Web', 'Anuncio', 'Feedback']) await call('add_canvas_node', { name: 'Sin solapes', kind: 'text', text: t, sticky: true });
+  await call('add_canvas_node', { name: 'Sin solapes', kind: 'text', text: 'Nota normal' });
+  let nodes = (await call('read_canvas', { name: 'Sin solapes' })).data.nodes;
+  assert.equal(nodes.length, 6);
+  assert.equal(anyOverlap(nodes), false, 'los nodos creados sin x/y no se pisan');
+  // con coordenadas explícitas se respetan tal cual
+  const fixed = await call('add_canvas_node', { name: 'Sin solapes', kind: 'text', text: 'Fijo', x: 1000, y: 1000 });
+  assert.equal(fixed.ok, true, fixed.text);
+  const f = (await call('read_canvas', { name: 'Sin solapes' })).data.nodes.find(n => n.text === 'Fijo');
+  assert.deepEqual([f.x, f.y], [1000, 1000]);
+  await call('auto_layout_canvas', { name: 'Sin solapes' });
+  nodes = (await call('read_canvas', { name: 'Sin solapes' })).data.nodes;
+  assert.equal(anyOverlap(nodes), false, 'tras auto_layout_canvas tampoco');
+});

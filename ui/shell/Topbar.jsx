@@ -74,7 +74,7 @@ function TitleCrumb({ crumbs, title, editable, editing, draft, setDraft, onBegin
       ) : (
         <span className={`sh-crumb-title${editable ? ' editable' : ''}${loading ? ' loading' : ''}`}
           onDoubleClick={editable ? onBeginEdit : undefined}
-          title={editable ? t('title.renameTip') : undefined}
+          title={editable ? `${title} — ${t('title.renameTip')}` : (title || undefined)}
           aria-current="page">{title}</span>
       )}
     </nav>

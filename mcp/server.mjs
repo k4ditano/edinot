@@ -4020,6 +4020,16 @@ function srvWriteProps(content, props) {
   }
   return lines.join('\n');
 }
+// Primer hueco libre del canvas para un nodo de w×h: cuadrícula de 4 columnas desde (80,80), sin pisar ningún nodo.
+function srvFreeSpot(nodes, w, h, gap = 24) {
+  const boxes = (nodes || []).map(n => ({ x: n.x || 0, y: n.y || 0, w: n.w || 240, h: n.h || 140 }));
+  const hit = (x, y) => boxes.some(b => x < b.x + b.w + gap && x + w + gap > b.x && y < b.y + b.h + gap && y + h + gap > b.y);
+  for (let i = 0; i < 400; i++) {
+    const x = 80 + (i % 4) * (w + gap), y = 80 + Math.floor(i / 4) * (h + gap);
+    if (!hit(x, y)) return { x, y };
+  }
+  return { x: 80, y: Math.max(80, ...boxes.map(b => b.y + b.h)) + gap };
+}
 // Límites de una sección: su encabezado y todo hasta el siguiente de su mismo nivel o superior (líneas).
 function srvSectionBounds(content, heading) {
   const lines = String(content || '').split('\n');
@@ -4935,6 +4945,8 @@ server.tool(
     } else if (kind === 'query') {
       node.query = query || '';
     }
+    // Sin x/y se busca un hueco libre: antes todos los nodos caían en (80,80), uno encima de otro.
+    if (x == null && y == null) { const p = srvFreeSpot(block.json.nodes, node.w, node.h); node.x = p.x; node.y = p.y; }
     const next = { ...block.json, nodes: [...block.json.nodes, node] };
     await s.canvasCommit(f.id, next, { content, block });
     s.publishMcpAction({ kind: 'canvas_add_node', note: f.name, noteId: f.id, vault: s.vaultName(f.vaultId), nodeKind: kind, nodeId: id });
@@ -5506,10 +5518,13 @@ server.tool(
     const { f, content, block } = await ensureCanvas(s, name);
     const cols = Math.max(1, Math.ceil(Math.sqrt(block.json.nodes.length || 1)));
     const padX = 40, padY = 32, nodeW = 240, nodeH = 140;
+    // La celda se ajusta al nodo MÁS GRANDE: con una celda fija de 240×140 los post-its (180×180) se pisaban entre filas.
+    const cellW = Math.max(nodeW, ...block.json.nodes.map(n => n.w || nodeW));
+    const cellH = Math.max(nodeH, ...block.json.nodes.map(n => n.h || nodeH));
     const nodes = block.json.nodes.map((n, i) => ({
       ...n,
-      x: padX + (i % cols) * (nodeW + padX),
-      y: padY + Math.floor(i / cols) * (nodeH + padY),
+      x: padX + (i % cols) * (cellW + padX),
+      y: padY + Math.floor(i / cols) * (cellH + padY),
       w: n.w || nodeW,
       h: n.h || nodeH,
     }));

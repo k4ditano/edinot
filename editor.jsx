@@ -841,7 +841,7 @@ function CommentDraftModal({ anchorText, memberEmails, aiAgents, onCancel, onSub
           </blockquote>
         )}
         <ChatComposer
-          placeholder={t('cmt.composer.ph')}
+          placeholder={t('cmt.composer.ph', { mod: MOD_KEY })}
           memberEmails={memberEmails}
           aiAgents={aiAgents}
           autoFocus
@@ -893,7 +893,7 @@ export function AnchorCommentPopover({ x, y, thread, memberEmails, aiAgents, onR
         ))}
       </div>
       <ChatComposer
-        placeholder={t('cmt.anchor.replyPh')}
+        placeholder={t('cmt.anchor.replyPh', { mod: MOD_KEY })}
         memberEmails={memberEmails}
         aiAgents={aiAgents}
         compact
@@ -902,11 +902,17 @@ export function AnchorCommentPopover({ x, y, thread, memberEmails, aiAgents, onR
   );
 }
 
+// Tecla modificadora para enviar con Intro: Cmd en macOS, Ctrl en el resto (los textos decían «Cmd» en todas partes).
+const MOD_KEY = (typeof navigator !== 'undefined' && /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent || '')) ? 'Cmd' : 'Ctrl';
+
 // The local hub signs everything as local@edinot.local: show that as «You», not as an address.
+// Y el autor genérico «ai» (comentarios de un asistente sin alias propio) se muestra siempre igual: «IA» / «AI».
 function commentAuthorLabel(author, fallback) {
   const a = String(author || '');
-  if (!a) return fallback;
-  return /@edinot\.local$/i.test(a) ? t('cmt.you') : a;
+  const raw = a || fallback;
+  if (!raw) return raw;
+  if (String(raw).toLowerCase() === 'ai') return t('cmt.ai');
+  return /@edinot\.local$/i.test(a) ? t('cmt.you') : raw;
 }
 
 function AiCommentItem({ comment: c, depth = 0, children, onResolve, onDelete, onReply, onPostReply, memberEmails = [], aiAgents = [], liveAliases = [], waitingAliases = [], onOpenThread, onFocusAnchor }) {
@@ -1124,7 +1130,7 @@ function ReplyToasts() {
     <div className="reply-toasts">
       {items.map(it => {
         const isAi = it.kind === 'ai-reply';
-        const who = isAi ? ('@' + (it.alias || 'ai')) : (it.author || t('toast.someone'));
+        const who = isAi ? (it.alias ? '@' + it.alias : t('cmt.ai')) : commentAuthorLabel(it.author, t('toast.someone'));
         const verb = it.kind === 'mention' ? t('toast.mentioned')
           : it.kind === 'comment' ? t('toast.commented')
           : t('toast.replied');
@@ -1175,7 +1181,7 @@ function SyncProgressToast() {
   }, [p.loading]);
   if (!shown) return null;
   return (
-    <div className="reply-toasts" style={{ left: 16, right: 'auto' }}>
+    <div className="reply-toasts" style={{ left: 'calc(var(--side-w, 260px) + 16px)', right: 'auto', bottom: 16 }}>
       <div className="reply-toast" role="status">
         <div className="reply-toast-head">
           <span className="reply-toast-ico"><VIcon name="refresh" /></span>
@@ -1667,7 +1673,7 @@ function useAllVaultDocsVersion() {
 // ─────────────────────────────────────────────────────────────
 const SAMPLE_DOCS = {
   es: {
-    manualName: 'edinot-manual.md',
+    manualName: 'Manual de Edinot.md',
     manual: `# Edinot — Manual rápido
 
 Editor **Markdown** multiplataforma con render en vivo. Escribe en *texto plano* y alterna con \`⌘/\` para ver el resultado.
@@ -1705,7 +1711,7 @@ function saludar(nombre) { return \`Hola, \${nombre}!\`; }
 
 ## Wikilinks
 
-Enlaza a otras notas con dobles corchetes: [[notas-reunion]] o con alias [[ideas|mis ideas sueltas]]. Si la nota no existe, el enlace aparece en rojo.
+Enlaza a otras notas con dobles corchetes: [[Notas de reunión]] o con alias [[Ideas|mis ideas sueltas]]. Si la nota no existe, el enlace aparece en rojo.
 
 ## Tablas inteligentes
 
@@ -1749,7 +1755,7 @@ https://www.youtube.com/watch?v=jNQXAC9IVRw
 
 ¡Empieza! Borra esta nota cuando ya no la necesites.
 `,
-    meetingName: 'notas-reunion.md',
+    meetingName: 'Notas de reunión.md',
     meeting: `# Notas de reunión
 
 ## Asistentes
@@ -1761,7 +1767,7 @@ https://www.youtube.com/watch?v=jNQXAC9IVRw
 - [ ] Cerrar el Q2
 - [ ] Mover el lanzamiento al jueves
 `,
-    ideasName: 'ideas.md',
+    ideasName: 'Ideas.md',
     ideas: `# Ideas sueltas
 
 > "El secreto de la creatividad es saber esconder tus fuentes."
@@ -1772,7 +1778,7 @@ https://www.youtube.com/watch?v=jNQXAC9IVRw
 `,
   },
   en: {
-    manualName: 'edinot-manual.md',
+    manualName: 'Edinot manual.md',
     manual: `# Edinot — Quick manual
 
 Cross-platform **Markdown** editor with live render. Write in *plain text* and toggle with \`⌘/\` to see the rendered output.
@@ -1810,7 +1816,7 @@ function greet(name) { return \`Hello, \${name}!\`; }
 
 ## Wikilinks
 
-Link other notes with double brackets: [[notas-reunion]] or with an alias [[ideas|my loose ideas]]. If the note does not exist, the link shows in red.
+Link other notes with double brackets: [[Meeting notes]] or with an alias [[Ideas|my loose ideas]]. If the note does not exist, the link shows in red.
 
 ## Smart tables
 
@@ -1854,7 +1860,7 @@ https://www.youtube.com/watch?v=jNQXAC9IVRw
 
 Get started! Delete this note when you no longer need it.
 `,
-    meetingName: 'meeting-notes.md',
+    meetingName: 'Meeting notes.md',
     meeting: `# Meeting notes
 
 ## Attendees
@@ -1866,7 +1872,7 @@ Get started! Delete this note when you no longer need it.
 - [ ] Close Q2
 - [ ] Move launch to Thursday
 `,
-    ideasName: 'ideas.md',
+    ideasName: 'Ideas.md',
     ideas: `# Loose ideas
 
 > "The secret of creativity is knowing how to hide your sources."
@@ -3299,6 +3305,23 @@ export function createMdRenderer({ resolveWikilink, getNoteContent }) {
     }
     return `<span class="wikilink wikilink-broken" title="No existe: ${escapeHtml(name)}">${escapeHtml(label)}</span>`;
   };
+
+  // Etiquetas #palabra: pastilla en lectura. Mismo criterio que list_tags / el índice de etiquetas (empieza por letra o _,
+  // va tras un espacio, un paréntesis o el inicio), así lo que la app cuenta como etiqueta es lo que se ve como etiqueta.
+  const TAG_AT = /^#([\p{L}_][\p{L}\p{N}_\/-]{0,59})/u;
+  md.inline.ruler.before('link', 'hashtag', (state, silent) => {
+    const src = state.src;
+    if (src.charCodeAt(state.pos) !== 0x23) return false;
+    if (state.pos > 0 && !/[\s(]/.test(src[state.pos - 1])) return false;
+    const m = TAG_AT.exec(src.slice(state.pos, state.pos + 62));
+    if (!m) return false;
+    if (silent) return true;
+    const token = state.push('hashtag', '', 0);
+    token.meta = { tag: m[1] };
+    state.pos += m[0].length;
+    return true;
+  });
+  md.renderer.rules.hashtag = (tokens, idx) => `<span class="md-tag" data-tag="${escapeHtml(tokens[idx].meta.tag)}">#${escapeHtml(tokens[idx].meta.tag)}</span>`;
 
   // Transclusión: una línea que es solo ![[Nota]] / ![[Nota#Título]] /
   // ![[Nota#^id]] → el contenido de esa nota (o sección) en solo lectura.
@@ -6993,7 +7016,7 @@ function NotificationsBell({ syncConfig, onOpenWorkspace }) {
       case 'snapshot.restore':   return `${from} restauró un snapshot${ws}`;
       case 'mention':            return `${from} te mencionó${ws}${preview}`;
       case 'reply':              return `${from} respondió a tu comentario${note}${preview}`;
-      case 'ai-reply':           return `@${pl.alias || 'ai'} respondió en tu hilo${note}${preview}`;
+      case 'ai-reply':           return `${pl.alias ? '@' + pl.alias : t('cmt.ai')} respondió en tu hilo${note}${preview}`;
       case 'ambient':            return `Tarea estancada${note}: @${pl.targetAlias || 'agente'} lleva ${pl.ageMins}min sin terminar${preview}`;
       case 'form.submit':        return `${t('notif.formSubmit')}${pl.formTitle ? ` "${pl.formTitle}"` : ''}${ws}`;
       default:                   return `${from} · ${n.kind}${ws}`;
@@ -9440,6 +9463,9 @@ function EdinotApp() {
 
   // Sync (Hocuspocus) — connects on mount if a config exists, listens for status.
   const [syncStatus, setSyncStatus] = useState('disconnected');
+  // Primera sincronización con el servidor en curso: el punto de la barra lateral se pone ámbar mientras dura.
+  const [initSyncLoading, setInitSyncLoading] = useState(getSyncProgress().loading);
+  useEffect(() => { setInitSyncLoading(getSyncProgress().loading); return onSyncProgress((p) => setInitSyncLoading(p.loading)); }, []);
   const [presence, setPresence] = useState([]);
   const [aiAgents, setAiAgents] = useState([]);
   const knownAiAgents = useMemo(() => {
@@ -13596,7 +13622,7 @@ function EdinotApp() {
               </div>
               {canCommentActiveNote && (
                 <ChatComposer
-                  placeholder={t('cmt.panel.composer.ph')}
+                  placeholder={t('cmt.panel.composer.ph', { mod: MOD_KEY })}
                   memberEmails={workspaceMemberEmails}
                   aiAgents={knownAiAgents}
                   onSend={composeRootComment} />
@@ -13662,7 +13688,7 @@ function EdinotApp() {
           externalFiles={externalFiles}
           todayLabel={todayShortLabel}
           dueCount={dueReminderCount}
-          syncStatus={(syncConfigState && syncConfigState.token && !syncConfigState.hub) ? syncStatus : 'idle'}
+          syncStatus={(syncConfigState && syncConfigState.token && !syncConfigState.hub) ? (syncStatus === 'connected' && initSyncLoading ? 'syncing' : syncStatus) : 'idle'}
           loggedIn={!!(syncConfigState && syncConfigState.token && !syncConfigState.hub)}
           defaultNoteId={defaultNoteId}
           readOnly={isViewer}

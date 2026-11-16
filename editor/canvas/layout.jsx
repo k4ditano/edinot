@@ -40,6 +40,7 @@ import {
 } from '../../editor.jsx';
 import { vimeoId, isDirectVideoUrl, titleFromUrlShort, CANVAS_DEFAULT_NODE_W, CANVAS_DEFAULT_NODE_H, CANVAS_GROUP_DEFAULT_W, CANVAS_GROUP_DEFAULT_H, useStableFn, canvasNodeRect, grpRemapper, canvasPerf, CANVAS_CULL_MIN, CANVAS_EDGE_CULL_MIN, edgeTouches, CANVAS_MM_DIMS, canvasNodeId, canvasGroupId } from './common.jsx';
 import { CANVAS_STICKY_SIZE } from './strokes.jsx';
+import { stickyFontSize as _stickyFontSize } from '../../shared/sticky-fit.mjs';
 
 // Build a fast lookup table keyed by both note id and lowercased name so
 // `noteId` references in canvas survive renames and `noteName` references
@@ -172,26 +173,6 @@ export function canvasPreviewText(src) {
   return s.replace(/\s+/g, ' ').trim();
 }
 
-// Auto font-size for sticky notes: largest size (10-42px) whose wrapped text
-// fits the tile. Pure + deterministic — computed at render time, never
-// persisted, so concurrent editors always agree and no write cascades happen.
-export function stickyFontSize(text, w, h) {
-  const s = String(text || '');
-  if (!s.trim()) return 18;
-  const availW = Math.max(20, (w || CANVAS_STICKY_SIZE) - 26);
-  const availH = Math.max(20, (h || CANVAS_STICKY_SIZE) - 26);
-  const paragraphs = s.split('\n');
-  const fits = (fs) => {
-    const charsPerLine = Math.max(1, Math.floor(availW / (fs * 0.52)));
-    let lines = 0;
-    for (const p of paragraphs) lines += Math.max(1, Math.ceil(p.length / charsPerLine));
-    return lines * fs * 1.3 <= availH;
-  };
-  let lo = 10, hi = 42;
-  while (lo < hi) {
-    const mid = Math.ceil((lo + hi) / 2);
-    if (fits(mid)) lo = mid; else hi = mid - 1;
-  }
-  return lo;
-}
+// Auto font-size de los post-its: vive en shared/ (puro y comprobable); aquí solo se aplica el tamaño por defecto.
+export const stickyFontSize = (text, w, h) => _stickyFontSize(text, w, h, CANVAS_STICKY_SIZE);
 

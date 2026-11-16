@@ -65,6 +65,7 @@ export function syncLabel(status, loggedIn) {
   switch (status) {
     case 'connected': return t('shell.sync.connected');
     case 'connecting': return t('shell.sync.connecting');
+    case 'syncing': return t('shell.sync.syncing');
     case 'auth-failed': return t('shell.sync.authFailed');
     case 'error': return t('shell.sync.error');
     default: return loggedIn ? t('shell.sync.offline') : t('shell.sync.local');

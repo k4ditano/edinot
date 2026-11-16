@@ -230,7 +230,7 @@ export const HomePage = memo(function HomePage({
                     : `${kind === 'canvas' ? t('view.badge.canvas') + ' · ' : kind === 'database' ? t('home.qa.database') + ' · ' : ''}${relTime(st.t)}`;
                   return (
                     <button type="button" key={f.id} className={`hm-card${f.cover ? ' has-cover' : ''}`} onClick={() => A.openNote(f.id)}>
-                      <span className="hm-card-cover" aria-hidden="true" style={f.cover ? { background: coverCss(f.cover) } : undefined} />
+                      <span className="hm-card-cover" aria-hidden="true" style={f.cover ? { background: coverCss(f.cover) } : { background: `color-mix(in srgb, ${tone.bg} 55%, transparent)` }} />
                       <span className="hm-card-ic" style={{ background: tone.bg, color: tone.fg }}>
                         {f.icon ? <span className="hm-card-emoji">{f.icon}</span> : <Icon name={tone.icon} size={15} stroke={1.9} />}
                       </span>
