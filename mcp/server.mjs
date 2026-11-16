@@ -175,6 +175,7 @@ let currentToolArgs = null;
 const TOOLS_WITH_OWN_ACTION = new Set([
   'write_note', 'create_note', 'delete_note', 'rename_note', 'move_note',
   'append_note', 'replace_in_note', 'insert_in_note', 'edit_section', 'restore_note',
+  'duplicate_note', 'add_tag', 'remove_tag', 'delete_attachment',
   'attach_image', 'attach_file', 'download_attachment',
   'create_vault', 'rename_vault', 'delete_vault',
   'create_folder', 'rename_folder', 'delete_folder', 'move_folder',
@@ -513,6 +514,11 @@ gesture of every task, not as a rare option.
       \`edit_section\` (the body under a heading). \`write_note\` is
       for NEW notes or a deliberate full rewrite: it replaces everything,
       so use it on an existing note only when the user asked for that.
+    • **Housekeeping** — \`duplicate_note\` copies a note (canvases
+      included); \`add_tag\` / \`remove_tag\` manage #tags;
+      \`delete_attachment\` drops an attachment from a note;
+      \`disconnect_canvas_nodes\` removes canvas connectors;
+      \`edit_comment\` fixes a comment's text.
     • **Journaling** — \`get_or_create_daily_note\` for date-stamped logs.
     • **Safety** — \`list_snapshots\` / \`restore_snapshot\` are the
       time machine; \`undo_edit\` best-effort reverts your last short
@@ -4162,6 +4168,43 @@ server.tool(
   }),
 );
 
+// ── Etiquetas (#tag en el texto) ────────────────────────────────────────────
+const SRV_TAG_RX = /^[\p{L}_][\p{L}\p{N}_\/-]{0,59}$/u;
+const srvEsc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function srvNormTag(tag) {
+  const t = String(tag || '').trim().replace(/^#/, '');
+  if (!SRV_TAG_RX.test(t)) throw new Error(`invalid tag '${tag}': it must start with a letter or _ and use only letters, digits, _ - /`);
+  return t;
+}
+/** Añade `#tag` al final de la nota: en su última línea si esa línea ya es solo de etiquetas, si no en una nueva. */
+function srvAddTag(content, tag) {
+  const src = String(content || '');
+  if (srvExtractTags(src).some(x => x.toLowerCase() === tag.toLowerCase())) return null;
+  const body = src.replace(/\n+$/, '');
+  const lines = body.split('\n');
+  const last = lines[lines.length - 1] || '';
+  if (body && /^\s*(#[\p{L}_][\p{L}\p{N}_\/-]*\s*)+$/u.test(last)) { lines[lines.length - 1] = last.replace(/\s+$/, '') + ' #' + tag; return lines.join('\n') + '\n'; }
+  return (body ? body + '\n\n' : '') + '#' + tag + '\n';
+}
+/** Quita todas las apariciones de `#tag` fuera de bloques de código; una línea que era solo de esa etiqueta desaparece. */
+function srvRemoveTag(content, tag) {
+  const rx = new RegExp('(^|[\\s(])#' + srvEsc(tag) + '(?![\\p{L}\\p{N}_\\/-])', 'giu');
+  const onlyRx = new RegExp('^\\s*(#[\\p{L}_][\\p{L}\\p{N}_\\/-]*\\s*)+$', 'u');
+  let fenced = false, removed = 0;
+  const out = [];
+  for (const line of String(content || '').split('\n')) {
+    if (/^\s*```/.test(line)) { fenced = !fenced; out.push(line); continue; }
+    if (fenced) { out.push(line); continue; }
+    let n = 0;
+    const next = line.replace(rx, (_m, pre) => { n++; return pre; });
+    if (!n) { out.push(line); continue; }
+    removed += n;
+    if (onlyRx.test(line) && !next.trim()) continue;          // la línea era solo esa etiqueta
+    out.push(next.replace(/[ \t]{2,}/g, ' ').replace(/[ \t]+$/, ''));
+  }
+  return { text: out.join('\n'), removed };
+}
+
 server.tool(
   'replace_in_note',
   'Change a piece of an existing note WITHOUT rewriting the rest: replace an exact '
@@ -4258,6 +4301,120 @@ server.tool(
     s.publishMcpAction({ kind: 'write', note: f.name, noteId: f.id, vault: s.vaultName(f.vaultId), vaultId: f.vaultId || 'default', folderId: f.folderId || null, bytes: next.length });
     return json(withHints({ ok: true, id: f.id, name: f.name, heading, bytes: next.length },
       [{ tool: 'reveal_change', args: { name: f.name, text: b.lines[b.start].replace(/^#+\s*/, '') }, reason: 'open the note at the edited section' }]));
+  }),
+);
+
+server.tool(
+  'duplicate_note',
+  'Make a copy of an existing note (text, tables, properties, attachments references and, for a canvas, '
+  + 'its nodes and connectors). Comments are NOT copied. `newName` defaults to "<name> (copy)" and is '
+  + 'made unique; the copy lands in the same vault and folder unless you pass `vault` / `folder`.',
+  { name: z.string(), newName: z.string().optional(), vault: z.string().optional(), folder: z.string().optional() },
+  async ({ name, newName, vault, folder }) => withSession(async (s) => {
+    const f = s.findFileByName(name);
+    if (!f) throw new Error(`not found: ${name}`);
+    const targetVault = vault || f.vaultId || 'default';
+    const sameVault = !vault || String(vault) === String(f.vaultId || 'default') || String(vault) === s.vaultName(f.vaultId);
+    const targetFolder = folder != null ? folder : (sameVault ? (f.folderId || null) : null);
+    const stem = (n) => String(n).replace(/\.(md|markdown|txt)$/i, '');
+    const taken = new Set(s.listFiles({ vault: targetVault }).map(x => stem(x.name).toLowerCase()));
+    const base = stem(newName || `${stem(f.name)} (copy)`);
+    let candidate = base, n = 2;
+    while (taken.has(candidate.toLowerCase())) candidate = `${base} ${n++}`;
+    const content = await s.readContent(f.id);
+    const copy = await s.createFile(candidate, targetVault, targetFolder);
+    await s.writeContent(copy.id, content);
+    // A canvas keeps its live structure apart from the text: rebuild the copy's from the source's.
+    if (findCanvasBlock(content)) {
+      const { content: srcContent, block } = await ensureCanvas(s, f.name);
+      await s.canvasCommit(copy.id, block.json, { content: srcContent, block });
+    }
+    s.publishMcpAction({ kind: 'create', note: copy.name, noteId: copy.id, vault: s.vaultName(copy.vaultId), vaultId: copy.vaultId || 'default', folderId: copy.folderId || null, bytes: content.length });
+    return json(withHints({ ok: true, id: copy.id, name: copy.name, copiedFrom: f.name, vaultId: copy.vaultId || 'default', vault: s.vaultName(copy.vaultId), folderId: copy.folderId || null, bytes: content.length },
+      [{ tool: 'focus_note', args: { name: copy.name }, reason: 'open the copy' }]));
+  }),
+);
+
+server.tool(
+  'add_tag',
+  'Add a #tag to a note (without the #, or with it). It goes at the end of the note, on its last line if that '
+  + 'line is already only tags. Does nothing if the note already has that tag (case-insensitive). A tag starts '
+  + 'with a letter or _ and uses letters, digits, _ - /.',
+  { name: z.string(), tag: z.string() },
+  async ({ name, tag }) => withSession(async (s) => {
+    const f = s.findFileByName(name);
+    if (!f) throw new Error(`not found: ${name}`);
+    const t = srvNormTag(tag);
+    const next = srvAddTag(await s.readContent(f.id), t);
+    if (next == null) return json({ ok: true, id: f.id, name: f.name, tag: t, added: false, reason: 'the note already has this tag' });
+    await s.writeContent(f.id, next);
+    s.publishMcpAction({ kind: 'write', note: f.name, noteId: f.id, vault: s.vaultName(f.vaultId), vaultId: f.vaultId || 'default', folderId: f.folderId || null, bytes: next.length });
+    return json({ ok: true, id: f.id, name: f.name, tag: t, added: true });
+  }),
+);
+
+server.tool(
+  'remove_tag',
+  'Remove a #tag from a note: every occurrence outside code blocks. A line that held only that tag disappears. '
+  + 'Reports how many were removed (0 if the note did not have it).',
+  { name: z.string(), tag: z.string() },
+  async ({ name, tag }) => withSession(async (s) => {
+    const f = s.findFileByName(name);
+    if (!f) throw new Error(`not found: ${name}`);
+    const t = srvNormTag(tag);
+    const { text: next, removed } = srvRemoveTag(await s.readContent(f.id), t);
+    if (!removed) return json({ ok: true, id: f.id, name: f.name, tag: t, removed: 0 });
+    await s.writeContent(f.id, next);
+    s.publishMcpAction({ kind: 'write', note: f.name, noteId: f.id, vault: s.vaultName(f.vaultId), vaultId: f.vaultId || 'default', folderId: f.folderId || null, bytes: next.length });
+    return json({ ok: true, id: f.id, name: f.name, tag: t, removed });
+  }),
+);
+
+server.tool(
+  'delete_attachment',
+  'Remove an attachment from a note: deletes every reference to it in the text (link or image). Identify it with '
+  + '`attachment` (filename, a part of it, or the sha; optional if the note has only one — see list_attachments). '
+  + 'The file itself stays in the server\'s storage, because other notes may use it; only this note stops showing it.',
+  { name: z.string(), attachment: z.string().optional() },
+  async ({ name, attachment }) => withSession(async (s) => {
+    const f = s.findFileByName(name);
+    if (!f) throw new Error(`not found: ${name}`);
+    const content = await s.readContent(f.id);
+    const pick = pickAttachment(extractAttachmentRefs(content), attachment);
+    const mdRx = new RegExp('!?\\[[^\\]]*\\]\\(\\s*edinot:\\/\\/blob\\/' + pick.sha + '[^)]*\\)', 'gi');
+    const bareRx = new RegExp('edinot:\\/\\/blob\\/' + pick.sha, 'gi');
+    let removed = 0;
+    let next = content.replace(mdRx, () => { removed++; return ''; }).replace(bareRx, () => { removed++; return ''; });
+    const origLines = content.split('\n');
+    next = next.split('\n').filter((line, i) => !(line.trim() === '' && origLines[i] !== undefined && origLines[i].trim() !== '')).join('\n');   // líneas que solo tenían el adjunto
+    next = next.replace(/\n{3,}/g, '\n\n');
+    await s.writeContent(f.id, next);
+    s.publishMcpAction({ kind: 'write', note: f.name, noteId: f.id, vault: s.vaultName(f.vaultId), vaultId: f.vaultId || 'default', folderId: f.folderId || null, bytes: next.length });
+    return json({ ok: true, id: f.id, name: f.name, attachment: pick.filename, sha: pick.sha, referencesRemoved: removed });
+  }),
+);
+
+server.tool(
+  'disconnect_canvas_nodes',
+  'Remove connectors from a canvas. Pass `edgeId` (from read_canvas) to remove exactly one, or `from` and `to` '
+  + '(node or annotation ids) to remove every connector from `from` to `to`. Add `bothDirections` to also remove '
+  + 'those from `to` to `from`. The nodes themselves stay.',
+  { name: z.string(), edgeId: z.string().optional(), from: z.string().optional(), to: z.string().optional(), bothDirections: z.boolean().optional() },
+  async ({ name, edgeId, from, to, bothDirections }) => withSession(async (s) => {
+    const { f, content, block } = await ensureCanvas(s, name);
+    const edges = block.json.edges || [];
+    let drop;
+    if (edgeId) {
+      drop = (e) => e.id === edgeId;
+    } else if (from && to) {
+      drop = (e) => (e.from === from && e.to === to) || (bothDirections && e.from === to && e.to === from);
+    } else {
+      throw new Error('pass `edgeId`, or both `from` and `to`');
+    }
+    const removed = edges.filter(drop);
+    if (!removed.length) throw new Error(edgeId ? `edge not found: ${edgeId}` : `no connector between ${from} and ${to} — read_canvas lists the edges`);
+    await s.canvasCommit(f.id, { ...block.json, edges: edges.filter(e => !drop(e)) }, { content, block });
+    return json({ ok: true, removed: removed.map(e => ({ id: e.id, from: e.from, to: e.to })) });
   }),
 );
 
@@ -5831,6 +5988,17 @@ server.tool(
   async ({ id }) => withSession(async (s) => {
     const rec = s.resolveAnchoredComment(id);
     return json({ ok: true, comment: rec });
+  }),
+);
+
+server.tool(
+  'edit_comment',
+  'Change the text of an anchored comment or reply (by `id`, from list_comments) and mark it as edited. Mentions '
+  + 'in the new text do not trigger new notifications or assistant tasks; those only fire when a comment is created.',
+  { id: z.string(), text: z.string().min(1).max(4000) },
+  async ({ id, text }) => withSession(async (s) => {
+    const c = s.editAnchoredComment(id, text);
+    return json({ ok: true, id: c.id, noteId: c.noteId, text: c.text, editedAt: c.editedAt });
   }),
 );
 

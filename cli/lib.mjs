@@ -2591,6 +2591,15 @@ export const ops = {
         if (!found) throw new Error(`comment not found: ${id}`);
         return found;
       },
+      // Cambia el texto de un comentario (o de una respuesta) y lo marca como editado. No vuelve a calcular
+      // menciones ni a crear tareas para asistentes: eso solo ocurre al crear el comentario.
+      editAnchoredComment(id, text) {
+        const t = String(text == null ? '' : text).trim();
+        if (!t) throw new Error('text must not be empty');
+        const found = patchComment(ydoc, id, { text: t, editedAt: new Date().toISOString() });
+        if (!found) throw new Error(`comment not found: ${id}`);
+        return found;
+      },
       deleteAnchoredComment(id) {
         return { removed: deleteComments(ydoc, [id]) };
       },
