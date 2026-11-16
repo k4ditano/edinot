@@ -2691,7 +2691,7 @@ ipcMain.handle('file:saveWithAttachments', async (_e, { content, defaultName }) 
     if (!bytes && blobSyncContext.httpUrl && blobSyncContext.token) {
       try {
         const url = `${blobSyncContext.httpUrl.replace(/\/$/, '')}/blobs/${sha}?t=${encodeURIComponent(blobSyncContext.token)}`;
-        const r = await fetch(url);
+        const r = await net.fetch(url);
         if (r.ok) {
           bytes = Buffer.from(await r.arrayBuffer());
           mime = r.headers.get('content-type') || mime;
@@ -2797,7 +2797,7 @@ ipcMain.handle('file:exportWorkspaceBundle', async (_e, { notes }) => {
     if (!bytes && blobSyncContext.httpUrl && blobSyncContext.token) {
       try {
         const url = `${blobSyncContext.httpUrl.replace(/\/$/, '')}/blobs/${sha}?t=${encodeURIComponent(blobSyncContext.token)}`;
-        const r = await fetch(url);
+        const r = await net.fetch(url);
         if (r.ok) {
           bytes = Buffer.from(await r.arrayBuffer());
           mime = r.headers.get('content-type') || mime;
@@ -2874,7 +2874,7 @@ ipcMain.handle('blob:convertOffice', async (_e, { sha, kind, auth }) => {
     } else {
       try {
         const url = `${creds.httpUrl.replace(/\/$/, '')}/blobs/${sha}?t=${encodeURIComponent(creds.token)}`;
-        const r = await fetch(url);
+        const r = await net.fetch(url);
         if (r.ok) {
           bytes = Buffer.from(await r.arrayBuffer());
           try {
@@ -2986,7 +2986,7 @@ async function resolveBlobBytes(sha, auth) {
   if (!creds.httpUrl || !creds.token) return { ok: false, error: 'sin conexión y no está en caché' };
   try {
     const url = `${creds.httpUrl.replace(/\/$/, '')}/blobs/${sha}?t=${encodeURIComponent(creds.token)}`;
-    const r = await fetch(url);
+    const r = await net.fetch(url);
     if (!r.ok) return { ok: false, error: `servidor respondió ${r.status} ${r.statusText || ''}`.trim() };
     const bytes = Buffer.from(await r.arrayBuffer());
     const mime = r.headers.get('content-type') || 'application/octet-stream';
@@ -3080,7 +3080,7 @@ ipcMain.handle('blob:prefetch', async (_e, { shas, maxBytes, auth, cacheMaxBytes
   for (let i = 0; i < candidates.length; i += META_CHUNK) {
     const slice = candidates.slice(i, i + META_CHUNK);
     try {
-      const r = await fetch(`${base}/blobs/meta`, {
+      const r = await net.fetch(`${base}/blobs/meta`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${creds.token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids: slice }),
@@ -3116,7 +3116,7 @@ ipcMain.handle('blob:prefetch', async (_e, { shas, maxBytes, auth, cacheMaxBytes
     while (cursor < toFetch.length) {
       const sha = toFetch[cursor++];
       try {
-        const r = await fetch(`${base}/blobs/${sha}?t=${tokenQuery}`);
+        const r = await net.fetch(`${base}/blobs/${sha}?t=${tokenQuery}`);
         if (!r.ok) { results.push({ sha, status: 'fetch_failed', code: r.status }); continue; }
         const buf = Buffer.from(await r.arrayBuffer());
         const mime = r.headers.get('content-type') || mimeBySha.get(sha) || 'application/octet-stream';
@@ -3233,7 +3233,7 @@ function registerBlobProtocol() {
 
     const target = `${blobSyncContext.httpUrl.replace(/\/$/, '')}/blobs/${sha}?t=${encodeURIComponent(blobSyncContext.token)}`;
     let upstream;
-    try { upstream = await fetch(target); }
+    try { upstream = await net.fetch(target); }
     catch (err) {
       return new Response('Upstream fetch failed: ' + err.message, { status: 502 });
     }
