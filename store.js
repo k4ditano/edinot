@@ -1306,6 +1306,27 @@ export function observeCollections(vaultId, fn) {
   return () => { try { e.yCollections.unobserve(fn); } catch {} };
 }
 
+// ─── Initial-sync progress ──────────────────────────────────────────────
+// How many vault documents have finished their first sync with the server. The first time a device joins,
+// the vaults download for a while and notes created elsewhere only show up once that finishes; the UI uses
+// this to say so (Settings → Sync and a toast) instead of leaving the user wondering.
+let _syncProgress = { loading: false, done: 0, total: 0 };
+const _syncProgressListeners = new Set();
+function recomputeSyncProgress() {
+  const entries = Array.from(vaultRegistry.values()).filter(e => e.provider);
+  const total = entries.length;
+  const done = entries.filter(e => e.synced).length;
+  const loading = total > 0 && done < total;
+  if (loading === _syncProgress.loading && done === _syncProgress.done && total === _syncProgress.total) return;
+  _syncProgress = { loading, done, total };
+  for (const fn of _syncProgressListeners) { try { fn(_syncProgress); } catch {} }
+}
+export function getSyncProgress() { return _syncProgress; }
+export function onSyncProgress(fn) {
+  _syncProgressListeners.add(fn);
+  return () => { _syncProgressListeners.delete(fn); };
+}
+
 // Open (or reuse) a Hocuspocus provider for the per-vault doc. Mirrors
 // the shape of connectSync but per-vault. Reuses the workspace's wsUrl
 // + token from cfg.
@@ -1314,6 +1335,7 @@ export function connectVaultProvider(vaultId, cfg) {
   const e = getVaultDoc(vaultId);
   if (e.provider) return e.provider;
   const docName = `ws:${cfg.currentWorkspaceId}:vault:${vaultId}`;
+  e.synced = false;
   try {
     e.provider = new HocuspocusProvider({
       websocketProvider: getSharedWs(cfg.wsUrl),
@@ -1321,12 +1343,15 @@ export function connectVaultProvider(vaultId, cfg) {
       token: cfg.token,
       document: e.ydoc,
       onStatus: ({ status }) => { e.status = status; },
+      onSynced: () => { e.synced = true; recomputeSyncProgress(); },
       onAuthenticationFailed: ({ reason } = {}) => {
         if (e.provider) {
           try { e.provider.shouldConnect = false; e.provider.destroy(); } catch {}
           e.provider = null;
         }
         e.status = 'auth-failed';
+        e.synced = false;
+        recomputeSyncProgress();
         console.warn('[vault] auth failed for', vaultId, reason || '(no reason)');
       },
       onDisconnect: () => { e.status = 'disconnected'; },
@@ -1348,6 +1373,7 @@ export function connectVaultProvider(vaultId, cfg) {
   } catch (err) {
     console.warn('[per-vault] provider init failed:', err.message);
   }
+  recomputeSyncProgress();
   return e.provider;
 }
 
@@ -1357,7 +1383,9 @@ export function disconnectAllVaultProviders() {
       try { e.provider.destroy(); } catch {}
       e.provider = null;
     }
+    e.synced = false;
   }
+  recomputeSyncProgress();
 }
 
 // ─── ACL Fase D — per-note doc registry ─────────────────────────────

@@ -12,7 +12,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { t, useI18n } from '../../../i18n.js';
 import {
-  deriveWsUrl, apiPairRedeem, apiPairStart, apiListDevices, apiRevokeDevice,
+  deriveWsUrl, apiPairRedeem, apiPairStart, apiListDevices, apiRevokeDevice, getSyncProgress, onSyncProgress,
 } from '../../../store.js';
 import { Row, Group, Switch, Button, TextField, Notice } from '../controls.jsx';
 import { rowProps } from '../registry.js';
@@ -206,10 +206,15 @@ export function SyncSection({ ctx }) {
   const purge = async () => { if (window.electronAPI && window.electronAPI.blobPurgeCache) { await window.electronAPI.blobPurgeCache(); refreshCacheStats(); } };
   const enforceNow = async () => { if (window.electronAPI && window.electronAPI.blobEnforceQuota) { await window.electronAPI.blobEnforceQuota(Number(settings.offlineCacheMax) || 0); refreshCacheStats(); } };
 
-  const dot = mode !== 'server' ? '' : status === 'connected' ? 'on' : status === 'connecting' ? 'warn' : (status === 'auth-failed' || status === 'error') ? 'bad' : '';
-  const statusText = t(STATUS_KEY[status] || STATUS_KEY.disconnected);
+  const [initSync, setInitSync] = useState(getSyncProgress());
+  useEffect(() => { setInitSync(getSyncProgress()); return onSyncProgress(setInitSync); }, []);
+  const firstSync = mode === 'server' && status === 'connected' && initSync.loading;
+
+  const dot = mode !== 'server' ? '' : firstSync ? 'warn' : status === 'connected' ? 'on' : status === 'connecting' ? 'warn' : (status === 'auth-failed' || status === 'error') ? 'bad' : '';
+  const statusText = firstSync ? t('st.sync.s.syncing', { done: initSync.done, total: initSync.total }) : t(STATUS_KEY[status] || STATUS_KEY.disconnected);
   const statusHelp = mode === 'hub' ? t('st.sync.hubHelp')
     : mode === 'server' && config.scope ? t('st.sync.sharedHelp', { host: hostOf(config.httpUrl), mode: config.scope.readOnly ? t('st.sync.readOnly') : t('st.sync.readWrite') })
+    : firstSync ? t('st.sync.syncingHelp', { host: hostOf(config.httpUrl) })
     : mode === 'server' ? t('st.sync.serverHelp', { host: hostOf(config.httpUrl) })
       : t('st.sync.none');
 

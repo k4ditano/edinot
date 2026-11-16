@@ -36,6 +36,7 @@ import {
   getContent, getContentString, setContent, deleteContent, mirrorContentToVault,
   migrateFromLocalStorage, seedDefaultsIfEmpty, whenIndexedDbReady,
   getSyncConfig, setSyncConfig, connectSync, disconnectSync, reconnectSync, resetSyncForReconnect, onSyncStatus, onPresence, onMcpAction, onAiPointer, onAiPresence, onAiAgents,
+  getSyncProgress, onSyncProgress,
   isPerVaultMode, ensureActiveVaultProvider, getActiveVaultDoc, getActiveVaultId, listVaultRegistryEntries, getVaultDoc,
   trashFile, listTrash, restoreTrashed, purgeTrashed, purgeOldTrash, trashContents,
   connectNoteProvider, getNoteAwareness, getNoteDoc, listNoteRegistryEntries, isNoteSynced,
@@ -1147,6 +1148,41 @@ function ReplyToasts() {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// Bottom-left toast while the vaults are still downloading from the server (the first sync on a new device
+// takes a while, and notes made elsewhere only show up once it ends). It waits two seconds before appearing,
+// so the instant re-syncs after a reconnect never flash it, and says "complete" for a moment when it ends.
+function SyncProgressToast() {
+  useI18n();
+  const [p, setP] = useState(getSyncProgress());
+  const [shown, setShown] = useState(false);
+  const [done, setDone] = useState(false);
+  useEffect(() => onSyncProgress(setP), []);
+  useEffect(() => {
+    if (p.loading) {
+      setDone(false);
+      const id = setTimeout(() => setShown(true), 2000);
+      return () => clearTimeout(id);
+    }
+    if (shown) {
+      setDone(true);
+      const id = setTimeout(() => { setShown(false); setDone(false); }, 4000);
+      return () => clearTimeout(id);
+    }
+  }, [p.loading]);
+  if (!shown) return null;
+  return (
+    <div className="reply-toasts" style={{ left: 16, right: 'auto' }}>
+      <div className="reply-toast" role="status">
+        <div className="reply-toast-head">
+          <span className="reply-toast-ico"><VIcon name="refresh" /></span>
+          <span className="reply-toast-who">{done ? t('toast.syncDone') : t('toast.syncing')}</span>
+        </div>
+        {!done && <div className="reply-toast-preview">{t('toast.syncingSub', { done: p.done, total: p.total })}</div>}
+      </div>
     </div>
   );
 }
@@ -14179,6 +14215,7 @@ function EdinotApp() {
           }}
           onClose={() => setReminderQueue(q => q.slice(1))} />
         <ReplyToasts />
+        <SyncProgressToast />
         <HistoryModal open={historyOpen} onClose={() => setHistoryOpen(false)}
           active={active} syncConfig={syncConfigState} isViewer={isViewer} />
         <VaultShareModal vault={shareVault} onClose={() => setShareVault(null)}
