@@ -174,7 +174,8 @@ let currentToolArgs = null;
 // for them to avoid duplicate chip entries.
 const TOOLS_WITH_OWN_ACTION = new Set([
   'write_note', 'create_note', 'delete_note', 'rename_note', 'move_note',
-  'append_note', 'attach_image', 'attach_file', 'download_attachment',
+  'append_note', 'replace_in_note', 'insert_in_note', 'edit_section', 'restore_note',
+  'attach_image', 'attach_file', 'download_attachment',
   'create_vault', 'rename_vault', 'delete_vault',
   'create_folder', 'rename_folder', 'delete_folder', 'move_folder',
   'focus_note', 'present_in_note', 'highlight_in_note', 'reveal_change',
@@ -506,10 +507,17 @@ gesture of every task, not as a rare option.
     • **Navigation / big notes** — \`get_outline\` then
       \`read_section(name, heading)\` instead of reading a whole long
       note. \`list_backlinks\` / \`get_outgoing_links\` walk the link graph.
+    • **Editing a note you did not create** — change only what you
+      must: \`replace_in_note\` (exact text → new text),
+      \`insert_in_note\` (start/end, before/after a text or heading) or
+      \`edit_section\` (the body under a heading). \`write_note\` is
+      for NEW notes or a deliberate full rewrite: it replaces everything,
+      so use it on an existing note only when the user asked for that.
     • **Journaling** — \`get_or_create_daily_note\` for date-stamped logs.
     • **Safety** — \`list_snapshots\` / \`restore_snapshot\` are the
       time machine; \`undo_edit\` best-effort reverts your last short
-      append. \`export_note\` writes md/html out.
+      append. Deleted notes sit in the trash: \`list_trash\` and
+      \`restore_note\` bring them back. \`export_note\` writes md/html out.
 `.trim();
 
 const server = new McpServer(
@@ -4006,7 +4014,8 @@ function srvWriteProps(content, props) {
   }
   return lines.join('\n');
 }
-function srvReadSection(content, heading) {
+// Límites de una sección: su encabezado y todo hasta el siguiente de su mismo nivel o superior (líneas).
+function srvSectionBounds(content, heading) {
   const lines = String(content || '').split('\n');
   const want = String(heading).trim().toLowerCase().replace(/^#+\s*/, '');
   let start = -1, level = 0, fenced = false;
@@ -4024,7 +4033,41 @@ function srvReadSection(content, heading) {
     const h = lines[i].match(/^(#{1,6})\s+/);
     if (h && h[1].length <= level) { end = i; break; }
   }
-  return lines.slice(start, end).join('\n').trim();
+  return { lines, start, end, level };
+}
+function srvReadSection(content, heading) {
+  const b = srvSectionBounds(content, heading);
+  return b ? b.lines.slice(b.start, b.end).join('\n').trim() : null;
+}
+// Posición (en caracteres) donde empieza la línea `i`.
+function srvLineOffset(lines, i) {
+  let o = 0;
+  for (let k = 0; k < i; k++) o += lines[k].length + 1;
+  return o;
+}
+// Posiciones de `needle` en `hay`, sin solaparse.
+function srvFindAll(hay, needle) {
+  const out = [];
+  if (!needle) return out;
+  for (let i = hay.indexOf(needle); i >= 0; i = hay.indexOf(needle, i + needle.length)) out.push(i);
+  return out;
+}
+const srvAround = (text, i, len) => text.slice(Math.max(0, i - 30), i + len + 30).replace(/\s+/g, ' ');
+// Elige UNA coincidencia (o todas con `all`) o falla diciendo cómo concretar: nunca edita a ciegas.
+function srvPickMatches(content, needle, { all, occurrence } = {}, label = 'text') {
+  if (!needle) throw new Error(`${label} must not be empty`);
+  const hits = srvFindAll(content, needle);
+  if (!hits.length) throw new Error(`${label} not found in the note — copy it exactly (search_in_note or read_section show the real text)`);
+  if (all) return hits;
+  if (occurrence) {
+    if (occurrence > hits.length) throw new Error(`occurrence ${occurrence} requested but the ${label} appears only ${hits.length} time(s)`);
+    return [hits[occurrence - 1]];
+  }
+  if (hits.length > 1) {
+    const where = hits.slice(0, 4).map((h, k) => `#${k + 1}: …${srvAround(content, h, needle.length)}…`).join(' | ');
+    throw new Error(`${label} appears ${hits.length} times — add more surrounding text to make it unique, pass occurrence (1-based) or replaceAll. ${where}`);
+  }
+  return hits;
 }
 
 server.tool(
@@ -4116,6 +4159,135 @@ server.tool(
     const section = srvReadSection(await s.readContent(f.id), heading);
     if (section == null) throw new Error(`heading not found: '${heading}' — call get_outline to see available headings`);
     return json({ note: f.name, heading, content: section });
+  }),
+);
+
+server.tool(
+  'replace_in_note',
+  'Change a piece of an existing note WITHOUT rewriting the rest: replace an exact '
+  + 'text by another. Use this instead of write_note whenever you only need to fix, '
+  + 'update or delete a passage — write_note overwrites the whole note and can '
+  + 'clobber what the user is typing. `find` must match exactly (copy it from '
+  + 'read_note / read_section / search_in_note) and be unique; if it appears more '
+  + 'than once the call fails and lists where — add surrounding text, pass '
+  + '`occurrence` (1-based) or `replaceAll`. `replace` may be empty to delete. '
+  + 'AFTER calling this chain reveal_change on the new text.',
+  { name: z.string(), find: z.string(), replace: z.string(), replaceAll: z.boolean().optional(), occurrence: z.number().int().min(1).optional() },
+  async ({ name, find, replace, replaceAll, occurrence }) => withSession(async (s) => {
+    const f = s.findFileByName(name);
+    if (!f) throw new Error(`not found: ${name}`);
+    const content = await s.readContent(f.id);
+    const hits = srvPickMatches(content, find, { all: replaceAll, occurrence }, '`find`');
+    let next = '', at = 0;
+    for (const h of hits) { next += content.slice(at, h) + replace; at = h + find.length; }
+    next += content.slice(at);
+    await s.writeContent(f.id, next);
+    s.publishMcpAction({ kind: 'write', note: f.name, noteId: f.id, vault: s.vaultName(f.vaultId), vaultId: f.vaultId || 'default', folderId: f.folderId || null, bytes: next.length });
+    return json(withHints({ ok: true, id: f.id, name: f.name, replaced: hits.length, bytes: next.length },
+      [{ tool: 'reveal_change', args: { name: f.name, text: replace ? replace.slice(0, 80) : '<a nearby passage>' }, reason: 'open the note and pulse the edited passage' }]));
+  }),
+);
+
+server.tool(
+  'insert_in_note',
+  'Insert text into an existing note at a precise place WITHOUT rewriting the '
+  + 'rest. `position`: "start" or "end" of the note; "after"/"before" a given '
+  + '`anchor` text (exact, unique — same rules as replace_in_note); or, with '
+  + '`heading` instead of `anchor`, "after" = at the end of that section (before '
+  + 'the next heading) and "before" = right above the heading. Your `text` is '
+  + 'inserted verbatim, so include the line breaks you want (e.g. a trailing "\\n").',
+  { name: z.string(), text: z.string(), position: z.enum(['start', 'end', 'before', 'after']), anchor: z.string().optional(), heading: z.string().optional() },
+  async ({ name, text: ins, position, anchor, heading }) => withSession(async (s) => {
+    const f = s.findFileByName(name);
+    if (!f) throw new Error(`not found: ${name}`);
+    const content = await s.readContent(f.id);
+    let at;
+    if (position === 'start') {
+      at = 0;
+      if (ins && !ins.endsWith('\n') && content && !content.startsWith('\n')) ins += '\n';
+    } else if (position === 'end') {
+      at = content.length;
+      if (content && !content.endsWith('\n') && !ins.startsWith('\n')) ins = '\n' + ins;
+    } else if (anchor != null && heading != null) {
+      throw new Error('pass `anchor` OR `heading`, not both');
+    } else if (anchor != null) {
+      const [h] = srvPickMatches(content, anchor, {}, '`anchor`');
+      at = position === 'after' ? h + anchor.length : h;
+    } else if (heading != null) {
+      const b = srvSectionBounds(content, heading);
+      if (!b) throw new Error(`heading not found: '${heading}' — call get_outline to see available headings`);
+      if (position === 'before') {
+        at = srvLineOffset(b.lines, b.start);
+        if (ins && !ins.endsWith('\n')) ins += '\n';
+      } else {
+        let last = b.end - 1;
+        while (last > b.start && !b.lines[last].trim()) last--;       // tras la última línea con texto de la sección
+        at = srvLineOffset(b.lines, last) + b.lines[last].length;
+        if (!ins.startsWith('\n')) ins = '\n' + ins;
+      }
+    } else {
+      throw new Error('position "before"/"after" needs `anchor` (a text) or `heading`');
+    }
+    const next = content.slice(0, at) + ins + content.slice(at);
+    await s.writeContent(f.id, next);
+    s.publishMcpAction({ kind: 'write', note: f.name, noteId: f.id, vault: s.vaultName(f.vaultId), vaultId: f.vaultId || 'default', folderId: f.folderId || null, bytes: next.length });
+    return json(withHints({ ok: true, id: f.id, name: f.name, insertedChars: ins.length, bytes: next.length },
+      [{ tool: 'reveal_change', args: { name: f.name, text: ins.trim().slice(0, 80) || '<a nearby passage>' }, reason: 'open the note and pulse the inserted text' }]));
+  }),
+);
+
+server.tool(
+  'edit_section',
+  'Replace the BODY of one section of a note (everything under a heading up to '
+  + 'the next heading of the same or higher level) and leave the rest of the note '
+  + 'untouched. The heading line itself is kept. `heading` is matched '
+  + 'case-insensitively, with or without leading #. Read it first with '
+  + 'read_section if you need its current text.',
+  { name: z.string(), heading: z.string(), content: z.string() },
+  async ({ name, heading, content: body }) => withSession(async (s) => {
+    const f = s.findFileByName(name);
+    if (!f) throw new Error(`not found: ${name}`);
+    const cur = await s.readContent(f.id);
+    const b = srvSectionBounds(cur, heading);
+    if (!b) throw new Error(`heading not found: '${heading}' — call get_outline to see available headings`);
+    const bodyLines = String(body).replace(/^\n+|\n+$/g, '').split('\n');
+    const after = b.lines.slice(b.end);
+    let next = [...b.lines.slice(0, b.start + 1), ...(String(body).trim() ? bodyLines : []), ...(after.length ? ['', ...after] : [])].join('\n');
+    if (cur.endsWith('\n') && !after.length && !next.endsWith('\n')) next += '\n';
+    await s.writeContent(f.id, next);
+    s.publishMcpAction({ kind: 'write', note: f.name, noteId: f.id, vault: s.vaultName(f.vaultId), vaultId: f.vaultId || 'default', folderId: f.folderId || null, bytes: next.length });
+    return json(withHints({ ok: true, id: f.id, name: f.name, heading, bytes: next.length },
+      [{ tool: 'reveal_change', args: { name: f.name, text: b.lines[b.start].replace(/^#+\s*/, '') }, reason: 'open the note at the edited section' }]));
+  }),
+);
+
+server.tool(
+  'list_trash',
+  'List the notes deleted from a vault (or all vaults) that can still be restored with restore_note. Newest first.',
+  { vault: z.string().optional() },
+  async ({ vault }) => withSession(async (s) => json({ trash: s.listTrash(vault) })),
+);
+
+server.tool(
+  'restore_note',
+  'Bring a deleted note back from the trash with its content, by `id` (from list_trash) or by `name`. If another note already has that '
+  + 'name it comes back as "… (restaurada)"; if its folder is gone it lands at the vault root.',
+  { id: z.string().optional(), name: z.string().optional() },
+  async ({ id, name }) => withSession(async (s) => {
+    let target = id;
+    if (!target) {
+      if (!name) throw new Error('pass `id` or `name`');
+      const want = String(name).toLowerCase().replace(/\.(md|markdown|txt)$/i, '');
+      const matches = s.listTrash().filter(t => String(t.name || '').toLowerCase().replace(/\.(md|markdown|txt)$/i, '') === want);
+      if (!matches.length) throw new Error(`no deleted note named '${name}' — call list_trash`);
+      if (matches.length > 1) throw new Error(`several deleted notes are named '${name}' — pass one id: ` + matches.map(m => `${m.id} (${m.vault}, ${m.deletedAt})`).join(' | '));
+      target = matches[0].id;
+    }
+    const meta = await s.restoreFromTrash(target);
+    if (!meta) throw new Error(`not in the trash: ${target}`);
+    s.publishMcpAction({ kind: 'mcp_tool', tool: 'restore_note', note: meta.name, noteId: target, target: meta.name, where: s.vaultName(meta.vaultId), vault: s.vaultName(meta.vaultId), vaultId: meta.vaultId });
+    return json(withHints({ ok: true, id: target, name: meta.name, vaultId: meta.vaultId, vault: s.vaultName(meta.vaultId) },
+      [{ tool: 'focus_note', args: { name: meta.name }, reason: 'open the restored note' }]));
   }),
 );
 

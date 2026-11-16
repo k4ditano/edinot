@@ -19,6 +19,7 @@ import {
   addCommentReply, threadRootIdOf, commentTypes,
 } from '../shared/comments-model.js';
 import { normalizeCollection as _normalizeCollection } from '../shared/collections.js';
+import { applyTextDiff } from '../shared/text-diff.mjs';
 import { promises as fs } from 'node:fs';
 import {
   existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync,
@@ -1004,21 +1005,15 @@ export const ops = {
       try {
         const e = await ensureNoteProvider(id, loc.vault.vaultId);
         if (e.accessible) {
-          e.ydoc.transact(() => {
-            if (e.ytext.length > 0) e.ytext.delete(0, e.ytext.length);
-            if (text) e.ytext.insert(0, text);
-          });
+          // Solo el tramo que cambia: borrar todo y reescribir rompía a quien tuviera la nota abierta.
+          e.ydoc.transact(() => { applyTextDiff(e.ytext, text); });
           wroteNote = true;
         }
       } catch { /* fall back to vault doc only */ }
       // Always mirror into the vault content text so cross-note views
       // (search, table parsers, canvas readers) keep working without
       // having to open every per-note doc.
-      loc.vault.ydoc.transact(() => {
-        const t = loc.vault.ydoc.getText('content:' + id);
-        if (t.length > 0) t.delete(0, t.length);
-        if (text) t.insert(0, text);
-      });
+      loc.vault.ydoc.transact(() => { applyTextDiff(loc.vault.ydoc.getText('content:' + id), text); });
       return { wroteNote };
     }
     async function appendContentLatest(id, body) {
@@ -1670,6 +1665,39 @@ export const ops = {
           if (t.length > 0) t.delete(0, t.length);
         });
         recordEdit({ noteId: id, kind: 'delete', name: meta && meta.name, bytesBefore: before.length });
+      },
+      // Papelera de cada bóveda (los borrados se pueden restaurar 30 días). Sin `vault`, todas.
+      listTrash(vaultRef) {
+        const only = vaultRef ? resolveVaultId(vaultRef) : null;
+        const out = [];
+        for (const v of vaultRegistry.values()) {
+          if (!v.ydoc || (only && v.vaultId !== only)) continue;
+          for (const [id, it] of v.ydoc.getMap('trash')) {
+            if (!it || !it.meta) continue;
+            out.push({ id, name: it.meta.name, vaultId: v.vaultId || 'default', vault: this.vaultName(v.vaultId), deletedAt: it.deletedAt || null, chars: String(it.content || '').length });
+          }
+        }
+        return out.sort((x, y) => String(y.deletedAt || '').localeCompare(String(x.deletedAt || '')));
+      },
+      // Devuelve la nota de la papelera a su bóveda con su contenido. Si ya hay otra con ese nombre, la restaura
+      // con «(restaurada)» detrás en vez de pisarla; si su carpeta ya no existe, va a la raíz de la bóveda.
+      async restoreFromTrash(id) {
+        for (const v of vaultRegistry.values()) {
+          if (!v.ydoc) continue;
+          const trash = v.ydoc.getMap('trash');
+          const it = trash.get(id);
+          if (!it || !it.meta) continue;
+          const taken = new Set(Array.from(v.yFiles.values()).map(m => String(m && m.name || '').toLowerCase()));
+          let name = it.meta.name || id + '.md';
+          if (taken.has(name.toLowerCase())) name = name.replace(/(\.(md|markdown|txt))?$/i, ' (restaurada)$1');
+          const folderOk = it.meta.folderId && v.yFolders && v.yFolders.get(it.meta.folderId);
+          const meta = { ...it.meta, name, folderId: folderOk ? it.meta.folderId : null };
+          v.ydoc.transact(() => { v.yFiles.set(id, meta); trash.delete(id); });
+          await writeContentLatest(id, String(it.content || ''));
+          recordEdit({ noteId: id, kind: 'restore', name });
+          return { ...meta, vaultId: v.vaultId || 'default' };
+        }
+        return null;
       },
       renameFile(id, newName) {
         const loc = locateFile(id);
