@@ -1485,8 +1485,22 @@ export function connectNoteProvider(noteId, vaultId, cfg) {
   if (!cfg || !cfg.wsUrl || !cfg.token || !cfg.currentWorkspaceId) return null;
   if (!noteId || !vaultId) return null;
   const e = getNoteDoc(noteId);
-  if (e.provider) return e.provider;
   const docName = `ws:${cfg.currentWorkspaceId}:vault:${vaultId}:note:${noteId}`;
+  if (e.provider) {
+    if (e.docName === docName) return e.provider;
+    // The note now lives in ANOTHER vault (another device moved it): its server document is a different
+    // one, so the provider we hold points at a document that no longer has the text. Reusing it left the
+    // body blank until the app was restarted. Drop it and start clean: the text we hold belongs to the old
+    // document, and the destination one arrives from the server (merging both would duplicate the body).
+    try { e.provider.destroy(); } catch {}
+    e.provider = null;
+    e.status = 'idle';
+    e.synced = false;
+    if (e.ytext && e.ytext.length > 0) {
+      try { e.ydoc.transact(() => { e.ytext.delete(0, e.ytext.length); }); } catch {}
+    }
+  }
+  e.docName = docName;
   try {
     e.provider = new HocuspocusProvider({
       websocketProvider: getSharedWs(cfg.wsUrl),
