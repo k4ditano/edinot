@@ -7,6 +7,7 @@ import { SHELL_STRINGS } from './ui/i18n-shell.js';
 import { PERF_STRINGS } from './ui/i18n-perf.js';
 import { SETTINGS_STRINGS } from './ui/i18n-settings.js';
 import { CALENDAR_STRINGS } from './ui/i18n-calendar.js';
+import { MEETING_STRINGS } from './ui/i18n-meetings.js';
 import { DB_STRINGS } from './ui/i18n-db.js';
 import { BLOCKS_STRINGS } from './ui/i18n-blocks.js';
 
@@ -2651,6 +2652,10 @@ for (const [lang, strings] of Object.entries(SHELL_STRINGS)) {
 }
 // Cadenas de Ajustes (ui/i18n-settings.js).
 for (const [lang, strings] of Object.entries(SETTINGS_STRINGS)) {
+  DICT[lang] = Object.assign(DICT[lang] || {}, strings);
+}
+// Reuniones y actas (ui/i18n-meetings.js).
+for (const [lang, strings] of Object.entries(MEETING_STRINGS)) {
   DICT[lang] = Object.assign(DICT[lang] || {}, strings);
 }
 // Página Calendario (ui/i18n-calendar.js).

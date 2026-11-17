@@ -27,8 +27,8 @@ await build({
 });
 const { SECTIONS, SECTION_IDS, ROWS, ROW_BY_ID, resolveTarget, searchSettings } = await import(pathToFileURL(outFile).href);
 
-test('siete secciones, sin grupo de IA, cuentas ni espacios', () => {
-  assert.deepEqual(SECTION_IDS, ['general', 'appearance', 'shortcuts', 'vaults', 'sync', 'connections', 'about']);
+test('ocho secciones, sin grupo de IA, cuentas ni espacios', () => {
+  assert.deepEqual(SECTION_IDS, ['general', 'appearance', 'shortcuts', 'vaults', 'sync', 'connections', 'meetings', 'about']);
   assert.deepEqual(SECTIONS.filter(s => s.group === 'footer').map(s => s.id), ['about']);
   for (const gone of ['profile', 'workspaces', 'agents', 'editor', 'language', 'calendar', 'integrations', 'advanced']) {
     assert.ok(!SECTION_IDS.includes(gone), `${gone} ya no es una sección`);
@@ -68,6 +68,8 @@ test('las filas se reparten donde toca', () => {
   assert.equal(sec('sync.devices'), 'sync');
   assert.equal(sec('sync.addDevice'), 'sync');
   assert.equal(sec('sync.join'), 'sync');
+  assert.equal(sec('meetings.sttServer'), 'meetings');
+  assert.equal(sec('meetings.llmModel'), 'meetings');
 });
 
 test('los enlaces y pestañas antiguas llevan a la sección nueva', () => {

@@ -28,17 +28,17 @@ function EvIcons({ inst }) {
   );
 }
 
-function Chip({ inst, onPointerDown, dim, active, showTime = true, cls = '' }) {
+function Chip({ inst, onPointerDown, dim, active, showTime = true, cls = '', bar = false, contPrev = false, contNext = false, hideTitle = false }) {
   return (
     <button type="button" data-ev-key={inst.key}
-      className={`cp-chip${inst.ev.status === 'done' ? ' done' : ''}${dim ? ' dim' : ''}${active ? ' active' : ''}${inst.allDay ? ' allday' : ''} ${cls}`}
+      className={`cp-chip${inst.ev.status === 'done' ? ' done' : ''}${dim ? ' dim' : ''}${active ? ' active' : ''}${inst.allDay || bar ? ' allday' : ''}${bar ? ' bar' : ''}${contPrev ? ' cont-prev' : ''}${contNext ? ' cont-next' : ''} ${cls}`}
       style={{ '--ev': inst.color }}
       title={`${timeLabel(inst) ? timeLabel(inst) + ' · ' : ''}${evTitle(inst)}${inst.ev.location ? ' · ' + inst.ev.location : ''}`}
       onPointerDown={(e) => onPointerDown(e, inst, 'move')}
       onClick={(e) => { if (e.detail === 0) onPointerDown(e, inst, 'open'); }}>
       <EvIcons inst={inst} />
-      {showTime && !inst.allDay && <span className="cp-chip-time">{hhmm(inst.s)}</span>}
-      <span className="cp-chip-title">{evTitle(inst)}</span>
+      {showTime && !inst.allDay && !bar && <span className="cp-chip-time">{hhmm(inst.s)}</span>}
+      <span className="cp-chip-title">{hideTitle ? '\u00a0' : evTitle(inst)}</span>
     </button>
   );
 }
@@ -200,15 +200,50 @@ export const MonthView = memo(function MonthView({
     return m;
   }, [insts]);
   const CAP = nWeeks > 5 ? 3 : 4;
+  // Los eventos que duran más de un día (o todo el día) se pintan como una barra continua: cada uno ocupa
+  // la MISMA fila en todos los días de su semana y se une con la celda de al lado.
+  const isBar = (inst) => inst.allDay || startOfDay(inst.s).getTime() !== startOfDay(new Date(Math.max(inst.e.getTime() - 1, inst.s.getTime()))).getTime();
+  const weekRows = useMemo(() => {
+    const out = [];
+    for (let w = 0; w < nWeeks; w++) {
+      const wd = days.slice(w * 7, w * 7 + 7);
+      const keys = wd.map(ymd);
+      const bars = new Map();
+      for (const k of keys) for (const inst of (byDay.get(k) || [])) if (isBar(inst)) bars.set(inst.key, inst);
+      const list = [...bars.values()].sort((x, y) => (x.s - y.s) || ((y.e - y.s) - (x.e - x.s)));
+      const rows = []; // rows[r] = Set de índices de día ocupados
+      const slot = new Map();
+      for (const inst of list) {
+        const idx = keys.map((k, i) => (byDay.get(k) || []).includes(inst) ? i : -1).filter(i => i >= 0);
+        let r = 0;
+        while (rows[r] && idx.some(i => rows[r].has(i))) r++;
+        if (!rows[r]) rows[r] = new Set();
+        idx.forEach(i => rows[r].add(i));
+        slot.set(inst.key, { row: r, first: idx[0], last: idx[idx.length - 1] });
+      }
+      out.push({ slot, nRows: rows.length });
+    }
+    return out;
+  }, [byDay, nWeeks, cursor]);
   return (
     <div className="cp-month">
       <div className="cp-month-dows">
         {Array.from({ length: 7 }, (_, i) => <div key={i}>{names.dowShort(dowIndex(i))}</div>)}
       </div>
       <div className="cp-month-grid" style={{ gridTemplateRows: `repeat(${nWeeks}, minmax(0, 1fr))` }}>
-        {days.map((d) => {
+        {days.map((d, di) => {
           const key = ymd(d);
-          const list = byDay.get(key) || [];
+          const wk = weekRows[Math.floor(di / 7)];
+          const col = di % 7;
+          const raw = byDay.get(key) || [];
+          // Filas de barras (con huecos donde la fila la ocupa otra) y después los eventos de un solo día.
+          const barRows = Array.from({ length: wk.nRows }, () => null);
+          const singles = [];
+          for (const inst of raw) {
+            const sl = wk.slot.get(inst.key);
+            if (sl) barRows[sl.row] = inst; else singles.push(inst);
+          }
+          const list = [...barRows, ...singles];
           const out = d.getMonth() !== cursor.getMonth();
           const isToday = sameDay(d, today);
           const isSel = selected && sameDay(d, selected);
@@ -221,12 +256,18 @@ export const MonthView = memo(function MonthView({
               onDoubleClick={(e) => { if (!e.target.closest('.cp-chip')) onCreateDay(d, e.currentTarget); }}>
               <button type="button" className="cp-mnum" onClick={() => onSelectDay(d)} aria-label={names.full(d)}>{d.getDate()}</button>
               <div className="cp-mlist">
-                {list.slice(0, CAP).map(inst => (
-                  <Chip key={inst.key} inst={inst} dim={dragKey === inst.key} active={activeKey === inst.key} onPointerDown={onPointerDownEvent} />
-                ))}
+                {list.slice(0, CAP).map((inst, ri) => {
+                  if (!inst) return <div key={'gap' + ri} className="cp-chip-gap" aria-hidden="true" />;
+                  const sl = wk.slot.get(inst.key);
+                  if (!sl) return <Chip key={inst.key} inst={inst} dim={dragKey === inst.key} active={activeKey === inst.key} onPointerDown={onPointerDownEvent} />;
+                  const contPrev = col > 0 && sl.first < col;
+                  const contNext = col < 6 && sl.last > col;
+                  return <Chip key={inst.key} inst={inst} bar contPrev={contPrev} contNext={contNext} hideTitle={contPrev}
+                    dim={dragKey === inst.key} active={activeKey === inst.key} onPointerDown={onPointerDownEvent} />;
+                })}
                 {list.length > CAP && (
-                  <button type="button" className="cp-more" title={t('calp.moreTip', { n: list.length })}
-                    onClick={() => onOpenDay(d)} onDoubleClick={(e) => e.stopPropagation()}>{t('calp.more', { n: list.length - CAP })}</button>
+                  <button type="button" className="cp-more" title={t('calp.moreTip', { n: raw.length })}
+                    onClick={() => onOpenDay(d)} onDoubleClick={(e) => e.stopPropagation()}>{t('calp.more', { n: Math.max(1, raw.length - list.slice(0, CAP).filter(Boolean).length) })}</button>
                 )}
                 {g && <div className="cp-chip ghost" style={{ '--ev': g.color }}>{g.label}</div>}
               </div>

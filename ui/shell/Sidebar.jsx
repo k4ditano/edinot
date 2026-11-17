@@ -421,6 +421,7 @@ export const Sidebar = memo(function Sidebar(props) {
       { label: t('home.qa.note'), icon: 'note', kbd: kbdHint('newNote', isMac), onSelect: () => A.newNote() },
       { label: t('shell.new.canvas'), icon: 'canvas', onSelect: () => A.newCanvas() },
       { label: t('home.qa.database'), icon: 'database', onSelect: () => A.newDatabase() },
+      ...(A.startMeeting && window.electronAPI && window.electronAPI.meetingBegin ? [{ label: t('meet.new'), icon: 'mic', onSelect: () => A.startMeeting() }] : []),
       { label: t('home.qa.template'), icon: 'template', submenu: templateItems },
     ],
   });

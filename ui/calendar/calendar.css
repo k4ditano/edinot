@@ -251,6 +251,11 @@ body.cp-dragging, body.cp-dragging * { cursor: grabbing !important; }
   touch-action: none;
 }
 .cp-chip:not(.allday) { background: transparent; color: var(--fg); }
+.cp-chip-gap { height: 22px; flex: none; }
+/* Barras continuas del mes: se unen con la celda de al lado (la celda tiene 4 px de margen). */
+.cp-chip.bar.cont-prev { margin-left: -5px; width: calc(100% + 5px); border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.cp-chip.bar.cont-next { margin-right: -5px; width: calc(100% + 5px); border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.cp-chip.bar.cont-prev.cont-next { width: calc(100% + 10px); }
 .cp-chip:not(.allday)::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--ev); flex: none; }
 .cp-chip:hover { background: color-mix(in srgb, var(--ev) 24%, var(--bg)); }
 .cp-chip.active { box-shadow: 0 0 0 2px var(--ev); }

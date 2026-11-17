@@ -11,7 +11,7 @@ export const GROUPS = [
   { id: 'footer', title: null },
 ];
 
-// Siete secciones (antes trece). General reúne editor e idioma; Conexiones reúne
+// Ocho secciones (antes trece). General reúne editor e idioma; Conexiones reúne
 // MCP, Web Clipper y Google Calendar; Acerca de incluye el diagnóstico.
 export const SECTIONS = [
   { id: 'general', group: 'app' },
@@ -20,6 +20,7 @@ export const SECTIONS = [
   { id: 'vaults', group: 'data' },
   { id: 'sync', group: 'data' },
   { id: 'connections', group: 'data' },
+  { id: 'meetings', group: 'data' },
   { id: 'about', group: 'footer' },
 ];
 export const SECTION_IDS = SECTIONS.map(s => s.id);
@@ -59,6 +60,16 @@ const ROW_LIST = [
   ['sync.offlineFull', 'sync', 'sin conexión offline completo full adjuntos attachments descargar download'],
   ['sync.cacheMax', 'sync', 'caché cache tamaño size máximo max gb disco disk'],
   ['sync.cacheStats', 'sync', 'caché cache compactar compact borrar clear vaciar purge'],
+  ['meetings.sttServer', 'meetings', 'reuniones meetings acta minutes servidor server transcribir transcribe transcripción transcription whisper url openai api'],
+  ['meetings.sttKey', 'meetings', 'reuniones meetings clave key token api transcripción transcription'],
+  ['meetings.sttModel', 'meetings', 'reuniones meetings modelo model whisper transcripción transcription voz audio'],
+  ['meetings.llmSame', 'meetings', 'reuniones meetings mismo same servidor server clave key acta minutes'],
+  ['meetings.llmServer', 'meetings', 'reuniones meetings acta minutes servidor server chat url openai api'],
+  ['meetings.llmKey', 'meetings', 'reuniones meetings acta minutes clave key token api'],
+  ['meetings.llmModel', 'meetings', 'reuniones meetings acta minutes modelo model gpt llm redactar write'],
+  ['meetings.lang', 'meetings', 'reuniones meetings idioma language español english acta'],
+  ['meetings.system', 'meetings', 'reuniones meetings audio sistema system altavoces speakers llamada call teams meet zoom micrófono microphone'],
+  ['meetings.keep', 'meetings', 'reuniones meetings conservar keep audio grabación recording guardar borrar delete'],
   ['calendar.client', 'connections', 'google oauth client id secret cliente credenciales credentials'],
   ['calendar.account', 'connections', 'google conectar connect desconectar disconnect cuenta account'],
   ['calendar.calendar', 'connections', 'calendario calendar google principal primary'],

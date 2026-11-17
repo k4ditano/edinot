@@ -15,6 +15,7 @@ import { AppearanceSection } from './sections/Appearance.jsx';
 import { ShortcutsSection } from './sections/Shortcuts.jsx';
 import { VaultsSection } from './sections/Data.jsx';
 import { SyncSection } from './sections/Sync.jsx';
+import { MeetingsSection } from './sections/Meetings.jsx';
 import { GeneralSection, ConnectionsSection, AboutSystemSection } from './sections/Composite.jsx';
 import { isElectron, isMacPlatform } from './util.js';
 import { usePrefersReducedMotion } from '../shared/themes.js';
@@ -28,6 +29,7 @@ const SECTION_COMPONENTS = {
   vaults: VaultsSection,
   sync: SyncSection,
   connections: ConnectionsSection,
+  meetings: MeetingsSection,
   about: AboutSystemSection,
 };
 

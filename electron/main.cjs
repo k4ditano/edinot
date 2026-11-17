@@ -368,6 +368,7 @@ if (!gotLock) {
   app.whenReady().then(async () => {
     bootTimes.ready = Math.round(performance.now());
     try { installTlsPinning(); } catch (err) { console.error('[tls] no se pudo instalar la fijación de certificados', err); }
+    try { require('./meetings.cjs').register({ app, ipcMain, session, net, desktopCapturer: require('electron').desktopCapturer, logLine }); } catch (err) { logLine('warn', 'meeting:register', err && err.message); }
     await startLoopbackServer();
     registerBlobProtocol();
     ensureStableMcpServer();

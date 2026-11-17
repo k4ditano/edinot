@@ -12,6 +12,7 @@ export function buildCommands(c) {
   const add = (cmd) => { if (cmd && cmd.when !== false) list.push(cmd); };
   const isMac = c.isMac;
   add({ id: 'new-note', label: t('cmd.newNote'), icon: 'note', kbd: kbdHint('newNote', isMac), suggested: true, when: c.canEdit, run: c.newNote, keywords: 'crear nota new note' });
+  add({ id: 'record-meeting', label: t('meet.cmd.start'), icon: 'mic', suggested: true, when: c.canEdit && !!c.startMeeting, run: c.startMeeting, keywords: 'reunión reunion meeting acta minutes grabar record transcribir transcribe llamada call' });
   add({ id: 'new-db', label: t('cmd.newDatabase'), icon: 'database', when: c.canEdit, run: c.newDatabase, keywords: 'tabla table base datos' });
   add({ id: 'new-folder', label: t('cmd.newFolder'), icon: 'folderPlus', when: c.canEdit, run: c.newFolder, keywords: 'carpeta folder' });
   add({ id: 'from-template', label: t('cmd.fromTemplate'), icon: 'template', when: c.canEdit && c.hasTemplates, run: c.fromTemplate, keywords: 'plantilla template' });

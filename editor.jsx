@@ -127,6 +127,8 @@ import { readMaxWidth } from './ui/shared/readWidth.js';
 import { mountDbBlock, mountLinkedDb, sweepDbBlocks, loadDatabaseBlock } from './editor/db/mount.jsx';
 import { LINKED_LANG, parseLinkedConfig, replaceLinkedFence, linkedFence, resolveLinkedTable, virtualSource } from './editor/db/linked.jsx';
 import { NoteBacklinks } from './ui/shell/NoteBacklinks.jsx';
+import { MeetingPill } from './ui/meetings/MeetingPill.jsx';
+import { configureMeetings, startMeeting, meetingsAvailable, meetingSettings, onMeetingState } from './ui/meetings/engine.js';
 import { buildTableIndex, buildTagIndex } from './ui/shared/workspaceIndex.js';
 import { blockEditorExtensions, blockPageMeta } from './editor/blocks/livePreview.js';
 import { blocksMarkdownIt } from './editor/blocks/markdownIt.js';
@@ -11508,6 +11510,27 @@ function EdinotApp() {
     seedNoteContent(id, body);
     return id;
   }, [activeVault]);
+  // Reuniones y actas: la nota con el acta y la transcripción, en el vault activo. Devuelve su id.
+  const createMeetingNote = useCallback(async ({ title, body }) => {
+    const id = 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+    const name = (String(title || 'Reunión').replace(/[\\/:*?"<>|\n\r]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || 'Reunión') + '.md';
+    yFiles.set(id, { id, name, vaultId: activeVault, size: '0.0 KB', nameLocked: false, icon: '🎙️' });
+    seedNoteContent(id, body);
+    return id;
+  }, [activeVault]);
+  const meetingCfgRef = useRef({});
+  meetingCfgRef.current = { createMeetingNote };
+  useEffect(() => {
+    configureMeetings({
+      getSettings: () => settingsRef.current || {},
+      getLang: () => getLang(),
+      createNote: (o) => meetingCfgRef.current.createMeetingNote(o),
+    });
+  }, []);
+  const startMeetingRec = useCallback(() => {
+    if (isViewer) return;
+    startMeeting().catch(() => {});
+  }, [isViewer]);
   const newCanvasFile = useCallback(() => {
     const id = createCanvasNote(null, true);
     setActiveId(id);
@@ -12925,8 +12948,13 @@ function EdinotApp() {
   const todayFile = useMemo(() => findDailyNote(activeVaultFiles), [activeVaultFiles]);
   const homeToday = useMemo(() => {
     if (view !== 'home' || !todayFile) return null;
-    const txt = getContentString(todayFile.id) || '';
-    const lines = txt.split(/\r?\n/).map(l => l.trim()).filter(l => l && !/^#{1,6}\s/.test(l) && !/^>/.test(l));
+    // Texto fresco del documento, no el de la caché de cadenas: el Inicio enseñaba lo del día anterior
+    // hasta abrir y cerrar la nota.
+    const yt = getContent(todayFile.id);
+    const txt = (yt ? yt.toString() : getContentString(todayFile.id)) || '';
+    // Sin bloques de código (el canvas es un bloque ```edinot-canvas) ni imágenes: no son texto que enseñar.
+    const clean = txt.replace(/```[\s\S]*?(```|$)/g, '').replace(/!\[[^\]]*\]\([^)]*\)/g, '');
+    const lines = clean.split(/\r?\n/).map(l => l.trim()).filter(l => l && !/^#{1,6}\s/.test(l) && !/^>/.test(l));
     const preview = lines.slice(0, 3)
       .map(l => l.replace(/^([-*+]\s+(\[[ xX]\]\s+)?|\d+\.\s+)/, ''))
       .join(' · ').replace(/[*_`]+/g, '').slice(0, 220);
@@ -13299,6 +13327,7 @@ function EdinotApp() {
     jumpTo: (id, snippet) => jumpToMatch(id, 0, snippet || undefined),
     newNote: () => newFile(),
     newCanvas: () => newCanvasFile(),
+    startMeeting: startMeetingRec,
     newDatabase: newDatabaseFile,
     newFolder: (vaultId, parentId) => newFolder(vaultId || activeVault, parentId || null),
     newNoteIn: (vaultId, folderId) => (folderId ? newFileInFolder(vaultId || activeVault, folderId) : newFile()),
@@ -13364,6 +13393,7 @@ function EdinotApp() {
       isCanvas: vmIsCanvasNote(active),
       isPinned: activeIsPinned, hasTemplates: false,
       newNote: A.newNote, newCanvas: A.newCanvas, newDatabase: A.newDatabase,
+      startMeeting: meetingsAvailable() ? A.startMeeting : null,
       surface: activeSurface, setSurface: (s) => switchSurfaceRef.current(s),
       newFolder: () => A.newFolder(activeVault, null),
       openToday: A.openToday, goHome: A.goHome, openCalendar: A.openCalendar,
@@ -14242,6 +14272,7 @@ function EdinotApp() {
           onClose={() => setReminderQueue(q => q.slice(1))} />
         <ReplyToasts />
         <SyncProgressToast />
+        <MeetingPill onOpenNote={(id) => shellActions.openNote(id)} onOpenSettings={(tab) => shellActions.openSettings(tab)} />
         <HistoryModal open={historyOpen} onClose={() => setHistoryOpen(false)}
           active={active} syncConfig={syncConfigState} isViewer={isViewer} />
         <VaultShareModal vault={shareVault} onClose={() => setShareVault(null)}
