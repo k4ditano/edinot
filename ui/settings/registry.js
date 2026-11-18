@@ -69,6 +69,8 @@ const ROW_LIST = [
   ['meetings.llmModel', 'meetings', 'reuniones meetings acta minutes modelo model gpt llm redactar write'],
   ['meetings.lang', 'meetings', 'reuniones meetings idioma language español english acta'],
   ['meetings.system', 'meetings', 'reuniones meetings audio sistema system altavoces speakers llamada call teams meet zoom micrófono microphone'],
+  ['meetings.diarize', 'meetings', 'reuniones meetings voces voices hablantes speakers diarización diarization identificar quién habla who speaks'],
+  ['meetings.speakers', 'meetings', 'reuniones meetings voces voices hablantes speakers número number personas people participantes'],
   ['meetings.keep', 'meetings', 'reuniones meetings conservar keep audio grabación recording guardar borrar delete'],
   ['calendar.client', 'connections', 'google oauth client id secret cliente credenciales credentials'],
   ['calendar.account', 'connections', 'google conectar connect desconectar disconnect cuenta account'],

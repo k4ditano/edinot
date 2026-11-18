@@ -82,6 +82,26 @@ export function dropEcho(mine, others, { minSimilarity = 0.6, slack = 4 } = {}) 
   });
 }
 
+/** Reparte a «los demás» entre las voces que detecta un servicio de diarización (`/diarize`):
+ *  `turns` = [{ speaker: 'S1', start, end }]. Cada tramo de texto se queda con la voz que más tiempo
+ *  coincide con él (si ninguna, la más cercana en el tiempo). Devuelve tramos con `spk` = 1, 2… */
+export function assignSpeakers(segs, turns) {
+  const t = (turns || []).map(x => ({ n: Number(String(x.speaker).replace(/\D+/g, '')) || 0, start: Number(x.start) || 0, end: Number(x.end) || 0 })).filter(x => x.n && x.end > x.start);
+  if (!t.length) return segs;
+  return (segs || []).map((s) => {
+    const over = new Map();
+    let best = null, bestGap = Infinity;
+    for (const x of t) {
+      const ov = Math.min(s.end, x.end) - Math.max(s.start, x.start);
+      if (ov > 0) over.set(x.n, (over.get(x.n) || 0) + ov);
+      else { const gap = Math.max(x.start - s.end, s.start - x.end); if (gap < bestGap) { bestGap = gap; best = x.n; } }
+    }
+    let spk = best;
+    if (over.size) spk = [...over.entries()].sort((a, b) => b[1] - a[1])[0][0];
+    return { ...s, spk };
+  });
+}
+
 /** Entrelaza lo mío y lo de los demás por tiempo; une tramos consecutivos de la misma voz (hueco ≤ gap s). */
 export function mergeTracks(mine, others, { gap = 2.5, offsetOthers = 0, maxChars = 600 } = {}) {
   const all = [
@@ -91,7 +111,7 @@ export function mergeTracks(mine, others, { gap = 2.5, offsetOthers = 0, maxChar
   const out = [];
   for (const s of all) {
     const prev = out[out.length - 1];
-    if (prev && prev.who === s.who && s.start - prev.end <= gap && prev.text.length < maxChars) {
+    if (prev && prev.who === s.who && prev.spk === s.spk && s.start - prev.end <= gap && prev.text.length < maxChars) {
       prev.text += ' ' + s.text;
       prev.end = Math.max(prev.end, s.end);
     } else out.push({ ...s });
@@ -102,7 +122,7 @@ export function mergeTracks(mine, others, { gap = 2.5, offsetOthers = 0, maxChar
 /** Texto plano con tiempos y quién habla: lo que se le da al modelo y lo que se guarda en la nota. */
 export function transcriptToText(segs, lang) {
   const L = meetingLabels(lang);
-  return (segs || []).map(s => `[${formatClock(s.start)}] ${s.who === 'me' ? L.me : L.others}: ${s.text}`).join('\n');
+  return (segs || []).map(s => `[${formatClock(s.start)}] ${s.who === 'me' ? L.me : (s.spk ? `${L.others} ${s.spk}` : L.others)}: ${s.text}`).join('\n');
 }
 
 /** Parte la transcripción en trozos de ≤ maxChars sin cortar líneas (para resumirla por partes si es larguísima). */
@@ -122,7 +142,7 @@ export function actaSystemPrompt(lang) {
   const en = lang === 'en';
   const L = meetingLabels(lang);
   return en
-    ? `You write meeting minutes from a transcript. Lines look like "[mm:ss] Me: …" or "[mm:ss] Others: …". "${L.me}" is the person who owns these notes; "${L.others}" are all the other participants together (the audio does not tell them apart).
+    ? `You write meeting minutes from a transcript. Lines look like "[mm:ss] Me: …" or "[mm:ss] Others: …". "${L.me}" is the person who owns these notes; "${L.others}" are all the other participants together (the audio does not tell them apart, unless a line says "${L.others} 1", "${L.others} 2"…: then those are distinct voices, whose names you may infer only if someone says them).
 Reply with ONE JSON object and nothing else, with this shape:
 {"title": "short, specific title (max 8 words)",
  "summary": "3-6 sentences: what the meeting was about and where it ended up",
@@ -132,7 +152,7 @@ Reply with ONE JSON object and nothing else, with this shape:
  "actions": [{"task": "what has to be done", "owner": "person, or '${L.me}' if it is for the note owner, or '' if unknown", "mine": true|false, "due": "date or deadline if said, else ''"}],
  "questions": ["something left unresolved or to be confirmed"]}
 Rules: write in English. Use only what the transcript says; never invent names, dates or numbers. "mine" is true only when the task is for "${L.me}". Skip small talk. If a list has nothing, use [].`
-    : `Redactas el acta de una reunión a partir de su transcripción. Las líneas son "[mm:ss] Yo: …" u "[mm:ss] Otros: …". "${L.me}" es la persona dueña de estas notas; "${L.others}" son todos los demás participantes juntos (el audio no los distingue).
+    : `Redactas el acta de una reunión a partir de su transcripción. Las líneas son "[mm:ss] Yo: …" u "[mm:ss] Otros: …". "${L.me}" es la persona dueña de estas notas; "${L.others}" son todos los demás participantes juntos (el audio no los distingue, salvo que la línea diga "${L.others} 1", "${L.others} 2"…: entonces son voces distintas, y solo les pones nombre si alguien lo dice).
 Responde con UN objeto JSON y nada más, con esta forma:
 {"title": "título corto y concreto (máx. 8 palabras)",
  "summary": "3-6 frases: de qué fue la reunión y en qué quedó",

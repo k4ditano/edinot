@@ -3,7 +3,7 @@
 // (electron/meetings.cjs), que además guarda la grabación en disco según se hace.
 
 import {
-  segmentsFromTranscription, cleanSegments, mergeTracks, transcriptToText, chunkTranscript,
+  segmentsFromTranscription, assignSpeakers, cleanSegments, mergeTracks, transcriptToText, chunkTranscript,
   dropEcho, actaSystemPrompt, partialPrompt, parseActaJson, normalizeActa, buildMeetingNote, defaultMeetingTitle,
 } from '../../shared/meeting-model.mjs';
 
@@ -27,7 +27,7 @@ export function meetingSettings() {
     key: same ? stt.key : g('meetingsLlmKey'),
     model: g('meetingsLlmModel', MEETING_DEFAULTS.llmModel),
   };
-  return { stt, llm, same, lang: s.meetingsLang === 'en' ? 'en' : 'es', system: s.meetingsSystemAudio !== false, keep: s.meetingsKeepAudio === true };
+  return { stt, llm, same, lang: s.meetingsLang === 'en' ? 'en' : 'es', system: s.meetingsSystemAudio !== false, diarize: s.meetingsDiarize === true, speakers: Math.max(0, Math.min(20, Math.round(Number(s.meetingsSpeakers) || 0))), keep: s.meetingsKeepAudio === true };
 }
 
 // ── Estado ──────────────────────────────────────────────────────────────
@@ -111,6 +111,8 @@ export async function startMeeting() {
   const mime = pickMime();
   const tracks = { mic: { stream: mic, cur: makeRecorder(mic, id, 'mic', 0, mime) } };
   if (sys) tracks.sys = { stream: sys, cur: makeRecorder(sys, id, 'sys', 0, mime) };
+  // Para saber quién habla hace falta la pista entera, sin cortes (los trozos no comparten voces): va aparte.
+  if (sys && s.diarize) tracks.sysall = { stream: sys, cur: makeRecorder(sys, id, 'sysall', 0, mime), whole: true };
 
   // Nivel del micrófono para la píldora.
   let ctx = null, analyser = null, buf = null;
@@ -136,6 +138,7 @@ export async function startMeeting() {
     if (!paused && elapsed >= (rec.seg + 1) * rec.segSec) {
       rec.seg++;
       for (const [name, tr] of Object.entries(rec.tracks)) {
+        if (tr.whole) continue;
         try { tr.cur.mr.stop(); } catch {}
         rec.stops.push(tr.cur.stopped);
         tr.cur = makeRecorder(tr.stream, rec.id, name, rec.seg, rec.mime);
@@ -251,7 +254,15 @@ export async function processMeeting(id, info = {}) {
       return out;
     };
     const [mineRaw, othersRaw] = await Promise.all([transcribeTrack('mic'), transcribeTrack('sys')]);
-    const others = cleanSegments(othersRaw);
+    let others = cleanSegments(othersRaw);
+    if (s.diarize && files.sysall && files.sysall.length) {
+      emit({ step: 'voices', stepDetail: '' });
+      try {
+        const d = await api().meetingDiarize({ id, baseUrl: s.stt.url, key: s.stt.key, numSpeakers: s.speakers });
+        if (d && d.ok && d.result && Array.isArray(d.result.segments)) others = assignSpeakers(others, d.result.segments);
+        else if (!d || !d.empty) emit({ warn: 'novoices' });
+      } catch { emit({ warn: 'novoices' }); }
+    }
     const mine = dropEcho(cleanSegments(mineRaw), others);
     const segs = mergeTracks(mine, others);
     if (!segs.length) { emit({ phase: 'error', id, error: 'silence', step: '' }); return; }

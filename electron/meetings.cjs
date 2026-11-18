@@ -12,7 +12,7 @@ const fs = require('node:fs/promises');
 const fsSync = require('node:fs');
 
 const ID_RE = /^[a-z0-9][a-z0-9-]{3,60}$/;
-const TRACKS = new Set(['mic', 'sys']);
+const TRACKS = new Set(['mic', 'sys', 'sysall']);
 
 function register({ app, ipcMain, session, net, desktopCapturer, logLine }) {
   const root = () => path.join(app.getPath('userData'), 'meetings');
@@ -38,14 +38,14 @@ function register({ app, ipcMain, session, net, desktopCapturer, logLine }) {
     return path.join(dirOf(id), `${track}-${String(n).padStart(3, '0')}.webm`);
   };
   const listSegments = async (id) => {
-    const out = { mic: [], sys: [] };
+    const out = { mic: [], sys: [], sysall: [] };
     let names = [];
     try { names = await fs.readdir(dirOf(id)); } catch { return out; }
     for (const n of names) {
-      const m = /^(mic|sys)-(\d{3})\.webm$/.exec(n);
+      const m = /^(mic|sys|sysall)-(\d{3})\.webm$/.exec(n);
       if (m) out[m[1]].push(Number(m[2]));
     }
-    out.mic.sort((a, b) => a - b); out.sys.sort((a, b) => a - b);
+    for (const k of Object.keys(out)) out[k].sort((a, b) => a - b);
     return out;
   };
   const base = (u) => String(u || '').trim().replace(/\/+$/, '');
@@ -142,6 +142,28 @@ function register({ app, ipcMain, session, net, desktopCapturer, logLine }) {
       return { ok: true, result: await res.json() };
     } catch (err) {
       logLine && logLine('warn', 'meeting:transcribe', err && err.message);
+      return { ok: false, error: String((err && err.message) || err) };
+    }
+  });
+
+  // Quién habla cuándo en la pista del sistema: un servicio opcional con `POST /diarize` (fichero + num_speakers).
+  ipcMain.handle('meeting:diarize', async (_e, { id, baseUrl, key, numSpeakers }) => {
+    let buf;
+    try { buf = await fs.readFile(trackFile(id, 'sysall', 0)); } catch { return { ok: true, empty: true }; }
+    if (buf.length < 2000) return { ok: true, empty: true };
+    const form = new FormData();
+    form.append('file', new Blob([buf], { type: 'audio/webm' }), 'sys.webm');
+    const n = Math.round(Number(numSpeakers) || 0);
+    if (n >= 2 && n <= 20) form.append('num_speakers', String(n));
+    try {
+      const res = await net.fetch(`${base(baseUrl)}/diarize`, {
+        method: 'POST', headers: { Authorization: `Bearer ${key}` }, body: form,
+        signal: AbortSignal.timeout(20 * 60 * 1000),
+      });
+      if (!res.ok) return { ok: false, error: await failText(res) };
+      return { ok: true, result: await res.json() };
+    } catch (err) {
+      logLine && logLine('warn', 'meeting:diarize', err && err.message);
       return { ok: false, error: String((err && err.message) || err) };
     }
   });

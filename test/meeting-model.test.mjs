@@ -113,3 +113,14 @@ test('mergeTracks parte los párrafos larguísimos de una misma voz', () => {
   assert.ok(r.length > 2);
   for (const s of r) assert.ok(s.text.length < 700);
 });
+
+test('assignSpeakers reparte los tramos por la voz que más coincide y mergeTracks los separa', async () => {
+  const { assignSpeakers, mergeTracks, transcriptToText } = await import('../shared/meeting-model.mjs');
+  const turns = [{ speaker: 'S1', start: 0, end: 10 }, { speaker: 'S2', start: 10, end: 20 }];
+  const segs = assignSpeakers([{ start: 1, end: 4, text: 'hola' }, { start: 5, end: 8, text: 'qué tal' }, { start: 11, end: 15, text: 'bien' }], turns);
+  assert.deepEqual(segs.map(s => s.spk), [1, 1, 2]);
+  const merged = mergeTracks([], segs);
+  assert.equal(merged.length, 2);
+  assert.match(transcriptToText(merged, 'es'), /Otros 1: hola qué tal\n\[00:11\] Otros 2: bien/);
+  assert.deepEqual(assignSpeakers([{ start: 0, end: 1, text: 'x' }], []).map(s => s.spk), [undefined]);
+});

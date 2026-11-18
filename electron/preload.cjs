@@ -77,6 +77,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   meetingReveal: (o) => ipcRenderer.invoke('meeting:reveal', o),
   meetingSegments: (o) => ipcRenderer.invoke('meeting:segments', o),
   meetingTranscribe: (o) => ipcRenderer.invoke('meeting:transcribe', o),
+  meetingDiarize: (o) => ipcRenderer.invoke('meeting:diarize', o),
   meetingChat: (o) => ipcRenderer.invoke('meeting:chat', o),
   meetingTest: (o) => ipcRenderer.invoke('meeting:test', o),
   gcalStatus: () => ipcRenderer.invoke('gcal:status'),

@@ -92,6 +92,13 @@ export function MeetingsSection({ ctx }) {
         <Row {...rowProps('meetings.system')}>
           <Switch label={t('st.row.meetings.system')} checked={settings.meetingsSystemAudio !== false} onChange={(v) => set({ meetingsSystemAudio: !!v })} />
         </Row>
+        <Row {...rowProps('meetings.diarize')} last={false}>
+          <Switch label={t('st.row.meetings.diarize')} checked={settings.meetingsDiarize === true} onChange={(v) => set({ meetingsDiarize: !!v })} />
+        </Row>
+        {settings.meetingsDiarize === true && (
+          <FieldRow {...f} id="meetings.speakers" field="meetingsSpeakers" placeholder="3"
+            normalize={(v) => { const n = Math.round(Number(String(v).trim())); return n >= 2 && n <= 20 ? String(n) : ''; }} />
+        )}
         <Row {...rowProps('meetings.keep')} last>
           <Switch label={t('st.row.meetings.keep')} checked={settings.meetingsKeepAudio === true} onChange={(v) => set({ meetingsKeepAudio: !!v })} />
         </Row>
