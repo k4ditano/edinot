@@ -93,18 +93,21 @@ const DRAW_EXTRA = [
   { tool: 'line', icon: 'line', label: 'canvas.tool.line' },
 ];
 
-// Formas cerradas (desplegable «Formas» de la barra principal).
+// Formas con texto (desplegable «Formas» de la barra principal): se insertan en el centro de la vista y se
+// escribe al momento. Sirven para organigramas y diagramas (se conectan con flechas y con Tab).
 const SHAPE_TOOLS = [
-  { tool: 'rect', icon: 'rect', label: 'canvas.tool.rect' },
-  { tool: 'ellipse', icon: 'ellipse', label: 'canvas.tool.ellipse' },
-  { tool: 'diamond', icon: 'diamond', label: 'canvas.tool.diamond' },
-  { tool: 'triangle', icon: 'triangle', label: 'canvas.tool.triangle' },
-  { tool: 'star', icon: 'star', label: 'canvas.tool.star' },
-  { tool: 'hexagon', icon: 'hexagon', label: 'canvas.tool.hexagon' },
-  { tool: 'cylinder', icon: 'cylinder', label: 'canvas.tool.cylinder' },
-  { tool: 'cloud', icon: 'cloud', label: 'canvas.tool.cloud' },
-  { tool: 'callout', icon: 'callout', label: 'canvas.tool.callout' },
+  { shape: 'rect', icon: 'rect', label: 'cv.shp.rect' },
+  { shape: 'ellipse', icon: 'ellipse', label: 'cv.shp.ellipse' },
+  { shape: 'diamond', icon: 'diamond', label: 'cv.shp.diamond' },
+  { shape: 'hexagon', icon: 'hexagon', label: 'cv.shp.hexagon' },
+  { shape: 'cylinder', icon: 'cylinder', label: 'cv.shp.cylinder' },
+  { shape: 'triangle', icon: 'triangle', label: 'cv.shp.triangle' },
+  { shape: 'cloud', icon: 'cloud', label: 'cv.shp.cloud' },
+  { shape: 'callout', icon: 'callout', label: 'cv.shp.callout' },
+  { shape: 'star', icon: 'star', label: 'cv.shp.star' },
 ];
+// Formas dibujadas a mano (sin texto): siguen disponibles en «Más herramientas».
+const DRAW_SHAPES = ['rect', 'ellipse', 'diamond', 'line'];
 
 function ToolBtn({ icon, label, on, onClick, className = '', ...rest }) {
   return (
@@ -120,10 +123,13 @@ export function CanvasDock({ tool, setTool, a }) {
   const [menu, setMenu] = useState(null);
   const [shapeMenu, setShapeMenu] = useState(null);
   const extra = DRAW_EXTRA.find(d => d.tool === tool);
-  const curShape = SHAPE_TOOLS.find(d => d.tool === tool);
-  const shapeItems = SHAPE_TOOLS.map(d => ({ label: t(d.label), icon: <CvIcon name={d.icon} size={15} />, checked: tool === d.tool ? true : undefined, onSelect: () => setTool(d.tool) }));
+  const drawn = DRAW_SHAPES.includes(tool) ? tool : null;
+  const shapeItems = SHAPE_TOOLS.map(d => ({ label: t(d.label), icon: <CvIcon name={d.icon} size={15} />, onSelect: () => setTimeout(() => a.addShape(d.shape), 150) }));   // tras cerrar el menú, para que el foco no vuelva al botón y cierre el texto
   const items = [
     { type: 'head', label: t('cv.sec.draw') },
+    ...DRAW_SHAPES.filter(k => k !== 'line').map(k => ({
+      label: t('cv.draw.' + k), icon: <CvIcon name={k} size={15} />, checked: tool === k ? true : undefined, onSelect: () => setTool(k),
+    })),
     ...DRAW_EXTRA.map(d => ({
       label: t(d.label), icon: <CvIcon name={d.icon} size={15} />, checked: tool === d.tool ? true : undefined,
       onSelect: () => setTool(d.tool),
@@ -132,8 +138,6 @@ export function CanvasDock({ tool, setTool, a }) {
     { type: 'head', label: t('cv.sec.insert') },
     { label: t('cv.ins.card'), icon: <CvIcon name="card" size={15} />, onSelect: a.addTextNode },
     { label: t('cv.ins.label'), icon: <CvIcon name="label" size={15} />, onSelect: a.addLabelNode },
-    { label: t('cv.ins.boxRect'), icon: <CvIcon name="boxRect" size={15} />, onSelect: () => a.addShape('rect') },
-    { label: t('cv.ins.boxEllipse'), icon: <CvIcon name="boxEllipse" size={15} />, onSelect: () => a.addShape('ellipse') },
     { label: t('cv.ins.url'), icon: <CvIcon name="link" size={15} />, onSelect: a.addUrlNode },
     { label: t('cv.ins.image'), icon: <CvIcon name="image" size={15} />, onSelect: a.addImageNode },
     { label: t('cv.ins.attach'), icon: <CvIcon name="attach" size={15} />, onSelect: a.addAttachmentNode },
@@ -144,12 +148,12 @@ export function CanvasDock({ tool, setTool, a }) {
       <ToolBtn icon="select" label={t('canvas.tool.select')} on={tool === 'select'} onClick={() => setTool('select')} />
       <ToolBtn icon="sticky" label={t('canvas.addSticky')} onClick={a.addSticky} />
       <ToolBtn icon="text" label={t('canvas.tool.text')} on={tool === 'text'} onClick={() => setTool('text')} />
-      <ToolBtn icon={curShape ? curShape.icon : 'shapes'} label={t('cv.shapes')} on={curShape ? true : undefined} aria-haspopup="menu" aria-expanded={!!shapeMenu}
+      <ToolBtn icon="shapes" label={t('cv.shapes')} aria-haspopup="menu" aria-expanded={!!shapeMenu}
         onClick={(e) => setShapeMenu(e.currentTarget.getBoundingClientRect())} />
       <ToolBtn icon="arrow" label={t('canvas.tool.arrow')} on={tool === 'arrow'} onClick={() => setTool('arrow')} />
       <ToolBtn icon="pen" label={t('canvas.tool.pen')} on={tool === 'pen'} onClick={() => setTool('pen')} />
       <ToolBtn icon="frame" label={t('canvas.addGroup')} onClick={a.addGroup} />
-      {extra && <ToolBtn icon={extra.icon} label={t(extra.label)} on onClick={() => setTool(extra.tool)} />}
+      {(extra || drawn) && <ToolBtn icon={(extra || { icon: drawn }).icon} label={extra ? t(extra.label) : t('cv.draw.' + drawn)} on onClick={() => setTool(extra ? extra.tool : drawn)} />}
       <span className="cv-sep" aria-hidden="true" />
       <ToolBtn icon="note" label={t('canvas.addNote')} onClick={a.addNoteNode} />
       <ToolBtn icon="more" label={t('cv.more')} aria-haspopup="menu" aria-expanded={!!menu}
@@ -182,27 +186,26 @@ export function CanvasActions({ a, snapGrid, fullscreen }) {
     { label: 'PNG', icon: <CvIcon name="image" size={15} />, title: t('canvas.exportPng'), onSelect: a.exportCanvasPng },
     { label: 'SVG', icon: <CvIcon name="download" size={15} />, title: t('canvas.exportSvg'), onSelect: a.exportCanvasSvg },
   ];
+  // Arriba a la derecha solo lo de uso constante; el resto cuelga de «⋯».
+  const moreItems = [
+    { label: t('canvas.snapGrid'), icon: <CvIcon name="grid" size={15} />, checked: snapGrid ? true : undefined, onSelect: a.toggleSnap },
+    { label: t('canvas.autoLayout'), icon: <CvIcon name="layout" size={15} />, submenu: () => layoutItems },
+    { label: t('canvas.session'), icon: <CvIcon name="timer" size={15} />, submenu: () => sessionItems },
+    { type: 'sep' },
+    { label: t('canvas.present.start'), icon: <CvIcon name="present" size={15} />, onSelect: a.startSlideshow },
+    ...exportItems.map(x => ({ ...x, label: t('cv.export') + ' ' + x.label })),
+    { label: fullscreen ? t('canvas.fullExit') : t('canvas.full'), icon: <CvIcon name={fullscreen ? 'fullExit' : 'full'} size={15} />, onSelect: a.toggleFullscreen },
+    { label: t('canvas.shortcuts'), icon: <CvIcon name="help" size={15} />, onSelect: a.openShortcuts },
+  ];
   return (
     <div className="cv-actions" role="toolbar" aria-label={t('cv.actions')}>
       <ToolBtn className="sm" icon="undo" label={t('canvas.undo')} onClick={a.canvasUndo} />
       <ToolBtn className="sm" icon="redo" label={t('canvas.redo')} onClick={a.canvasRedo} />
-      <span className="cv-sep" aria-hidden="true" />
-      <ToolBtn className="sm" icon="grid" label={t('canvas.snapGrid')} on={!!snapGrid} onClick={a.toggleSnap} />
-      <ToolBtn className="sm" icon="layout" label={t('canvas.autoLayout')} aria-haspopup="menu"
-        on={menu && menu.kind === 'layout' ? true : undefined} onClick={open('layout')} />
       <ToolBtn className="sm" icon="fit" label={t('canvas.fitContent')} onClick={a.fitToContent} />
-      <span className="cv-sep" aria-hidden="true" />
-      <ToolBtn className="sm" icon="timer" label={t('canvas.session')} aria-haspopup="menu"
-        on={(menu && menu.kind === 'session') || a.sessionTimer || a.sessionVote ? true : undefined} onClick={open('session')} />
-      <ToolBtn className="sm" icon="present" label={t('canvas.present.start')} onClick={a.startSlideshow} />
-      <ToolBtn className="sm" icon="download" label={t('cv.export')} aria-haspopup="menu"
-        on={menu && menu.kind === 'export' ? true : undefined} onClick={open('export')} />
-      <ToolBtn className="sm" icon={fullscreen ? 'fullExit' : 'full'} label={fullscreen ? t('canvas.fullExit') : t('canvas.full')} onClick={a.toggleFullscreen} />
-      <ToolBtn className="sm" icon="help" label={t('canvas.shortcuts')} onClick={a.openShortcuts} />
+      <ToolBtn className="sm" icon="more" label={t('cv.more')} aria-haspopup="menu"
+        on={menu ? true : undefined} onClick={open('more')} />
       {menu && (
-        <Menu anchor={menu.anchor} align="end" items={menu.kind === 'layout' ? layoutItems : menu.kind === 'session' ? sessionItems : exportItems}
-          onClose={() => setMenu(null)} minWidth={220} className="cv-menu"
-          label={menu.kind === 'layout' ? t('canvas.autoLayout') : menu.kind === 'session' ? t('canvas.session') : t('cv.export')} />
+        <Menu anchor={menu.anchor} align="end" items={moreItems} onClose={() => setMenu(null)} minWidth={230} className="cv-menu" label={t('cv.more')} />
       )}
     </div>
   );

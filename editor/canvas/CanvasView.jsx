@@ -8,6 +8,7 @@
 // ciclo es seguro porque este módulo sólo se evalúa cuando editor.jsx ya
 // terminó de cargarse.
 
+import { Menu } from '../../ui/shell/Menu.jsx';
 import { useI18n, t, getLang } from '../../i18n.js';
 import { useRef, useState, useMemo, useEffect, useLayoutEffect, useDeferredValue, useCallback, memo } from 'react';
 import { mountDbBlock, sweepDbBlocks } from '../db/mount.jsx';
@@ -141,6 +142,7 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
   const [snapGrid, setSnapGrid] = useState(false);
   const [selAnno, setSelAnno] = useState(() => new Set()); // selected annotation ids
   const [annoTextEdit, setAnnoTextEdit] = useState(null);  // annotation id whose text is being edited
+  const [selMenu, setSelMenu] = useState(null);           // menú «⋯» de la barra de selección
   const [autoEditId, setAutoEditId] = useState(null);      // freshly-placed label to open in edit mode
   const drawingRef = useRef(null); // in-flight stroke/shape state
   const [livePreview, setLivePreview] = useState(null); // { kind, ... } rendered while drawing
@@ -1212,7 +1214,7 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
     const id = canvasNodeId();
     const srcNode = nodeById.get(src.id);
     let node;
-    if (kind === 'shape') node = { id, kind: 'shape', shape: 'rect', x, y, w, h };
+    if (kind === 'shape') node = { id, kind: 'shape', shape: (srcNode && srcNode.kind === 'shape' && srcNode.shape) || 'rect', text: '', ...(srcNode && srcNode.kind === 'shape' && srcNode.color ? { color: srcNode.color } : {}), x, y, w, h };
     else if (kind === 'label') node = { id, kind: 'label', text: '', x, y, w, h, fontSize: 22 };
     else if (kind === 'note') node = { id, kind: 'note', x, y, w, h, ...extra };
     else node = { id, kind: 'text', sticky: true, text: '', color: (srcNode && srcNode.sticky && srcNode.color) || CANVAS_STICKY_COLORS[0], x, y, w, h };
@@ -1220,7 +1222,7 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
     const toSide = world ? sideToward(newRect, { x: src.x + src.w / 2, y: src.y + src.h / 2 }) : OPP[side];
     onChange(j => ({ ...j, nodes: [...(j.nodes || []), node], edges: [...(j.edges || []), { id: canvasEdgeId(), from: src.id, to: id, kind: 'manual', fromSide: side, toSide }] }));
     setSelected(new Set([id])); setSelAnno(new Set());
-    if (kind === 'sticky' || kind === 'label') setAutoEditId(id);
+    if (kind === 'sticky' || kind === 'label' || kind === 'shape') setAutoEditId(id);
     return id;
   };
   const pickConnected = (kind) => {
@@ -2146,9 +2148,13 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
     setTimeout(fitToContent, 60);
   };
   const addShape = (shape) => {
-    const pos = canvasCenter(160, 120);
-    const node = { id: canvasNodeId(), kind: 'shape', shape, x: pos.x, y: pos.y, w: 160, h: 120 };
+    let pos = canvasCenter(160, 120);
+    // Si ya hay algo justo ahí (otra forma recién puesta), se escalona para no taparla.
+    const nodes0 = json.nodes || [];
+    for (let k = 0; k < 12 && nodes0.some(n => Math.abs((n.x || 0) - pos.x) < 20 && Math.abs((n.y || 0) - pos.y) < 20); k++) pos = { x: pos.x + 40, y: pos.y + 40 };
+    const node = { id: canvasNodeId(), kind: 'shape', shape, text: '', x: pos.x, y: pos.y, w: 160, h: 120 };
     onChange(j => ({ ...j, nodes: [...(j.nodes || []), node] }));
+    setSelected(new Set([node.id])); setSelAnno(new Set()); setAutoEditId(node.id);   // se escribe nada más soltarla
   };
   // Sticky notes are the quick-capture primitive: created already in edit
   // mode (autoEditId) so the user can type immediately, Miro-style.
@@ -2177,7 +2183,11 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
     const ref = like || parent;
     const id = canvasNodeId();
     const w = ref.w || CANVAS_STICKY_SIZE, h = ref.h || CANVAS_STICKY_SIZE;
-    const node = { id, kind: 'text', sticky: true, text: '', color: ref.color || CANVAS_STICKY_COLORS[0], x: (parent.x || 0) + (parent.w || CANVAS_DEFAULT_NODE_W) + 70, y: parent.y || 0, w, h };
+    const at = { x: (parent.x || 0) + (parent.w || CANVAS_DEFAULT_NODE_W) + 70, y: parent.y || 0 };
+    // Un hijo de una forma es otra forma igual (organigramas, diagramas); de una nota adhesiva, otra nota.
+    const node = ref.kind === 'shape'
+      ? { id, kind: 'shape', shape: ref.shape || 'rect', text: '', ...(ref.color ? { color: ref.color } : {}), ...at, w: ref.w || 160, h: ref.h || 120 }
+      : { id, kind: 'text', sticky: true, text: '', color: ref.color || CANVAS_STICKY_COLORS[0], ...at, w, h };
     const edge = { id: canvasEdgeId(), from: parentId, to: id, kind: 'manual' };
     onChange(j => addChild(j, parentId, node, edge));
     setSelected(new Set([id])); setSelAnno(new Set()); setAutoEditId(id);
@@ -3076,35 +3086,34 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
             );
           })()}
           <span className="fmt-sep" />
-          <button className="fmt-btn" title={t('canvas.sel.alignLeft')} onClick={() => alignSelected('left')} disabled={selected.size < 2}><span className="fmt-ic"><VIcon name="alignL" /></span></button>
-          <button className="fmt-btn" title={t('canvas.sel.alignHCenter')} onClick={() => alignSelected('hcenter')} disabled={selected.size < 2}><span className="fmt-ic"><VIcon name="alignCH" /></span></button>
-          <button className="fmt-btn" title={t('canvas.sel.alignRight')} onClick={() => alignSelected('right')} disabled={selected.size < 2}><span className="fmt-ic"><VIcon name="alignR" /></span></button>
-          <span className="fmt-sep" />
-          <button className="fmt-btn" title={t('canvas.sel.alignTop')} onClick={() => alignSelected('top')} disabled={selected.size < 2}><span className="fmt-ic"><VIcon name="alignT" /></span></button>
-          <button className="fmt-btn" title={t('canvas.sel.alignVCenter')} onClick={() => alignSelected('vcenter')} disabled={selected.size < 2}><span className="fmt-ic"><VIcon name="alignCV" /></span></button>
-          <button className="fmt-btn" title={t('canvas.sel.alignBottom')} onClick={() => alignSelected('bottom')} disabled={selected.size < 2}><span className="fmt-ic"><VIcon name="alignB" /></span></button>
-          <span className="fmt-sep" />
-          <button className="fmt-btn" title={t('canvas.sel.distH')} onClick={() => distributeSelected('h')} disabled={selected.size < 3}><span className="fmt-ic"><VIcon name="distH" /></span></button>
-          <button className="fmt-btn" title={t('canvas.sel.distV')} onClick={() => distributeSelected('v')} disabled={selected.size < 3}><span className="fmt-ic"><VIcon name="distV" /></span></button>
-          <span className="fmt-sep" />
-          <button className="fmt-btn" title="🔒 Alt+L" onClick={toggleLockSelected}><span className="fmt-ic">🔒</span></button>
-          <button className="fmt-btn" title="Ctrl+G / Ctrl+Shift+G" onClick={(ev) => groupSelected(ev.shiftKey)}><span className="fmt-ic">▣</span></button>
           <button className="fmt-btn" title={t('canvas.sel.duplicate')} onClick={duplicateSelected}><span className="fmt-ic"><VIcon name="duplicate" /></span></button>
-          <button className="fmt-btn" title={t('canvas.sel.front')} onClick={() => reorderSelected(true)}><span className="fmt-ic"><VIcon name="front" /></span></button>
-          <button className="fmt-btn" title={t('canvas.sel.back')} onClick={() => reorderSelected(false)}><span className="fmt-ic"><VIcon name="back" /></span></button>
-          {selected.size >= 1 && (
-            <>
-              <span className="fmt-sep" />
-              {['👍', '❤️', '⭐', '❓'].map(em => (
-                <button key={em} className="fmt-btn canvas-sel-emoji" title={t('canvas.sel.react', { emoji: em })}
-                  onClick={() => reactSelected(em)}>{em}</button>
-              ))}
-              {selected.size === 1 && (
-                <button className="fmt-btn canvas-sel-emoji" title={t('canvas.sel.comment')}
-                  onClick={() => setNodeCommentFor(Array.from(selected)[0])}>💬</button>
-              )}
-            </>
-          )}
+          <button className="fmt-btn" title={t('cv.more')} aria-haspopup="menu" aria-expanded={!!selMenu}
+            onClick={(e) => setSelMenu(e.currentTarget.getBoundingClientRect())}><span className="fmt-ic">⋯</span></button>
+          {selMenu && (() => {
+            const n = selected.size;
+            const items = [
+              ...(n >= 2 ? [
+                { label: t('canvas.sel.alignLeft'), onSelect: () => alignSelected('left') },
+                { label: t('canvas.sel.alignHCenter'), onSelect: () => alignSelected('hcenter') },
+                { label: t('canvas.sel.alignRight'), onSelect: () => alignSelected('right') },
+                { label: t('canvas.sel.alignTop'), onSelect: () => alignSelected('top') },
+                { label: t('canvas.sel.alignVCenter'), onSelect: () => alignSelected('vcenter') },
+                { label: t('canvas.sel.alignBottom'), onSelect: () => alignSelected('bottom') },
+                ...(n >= 3 ? [{ label: t('canvas.sel.distH'), onSelect: () => distributeSelected('h') }, { label: t('canvas.sel.distV'), onSelect: () => distributeSelected('v') }] : []),
+                { type: 'sep' },
+              ] : []),
+              { label: t('canvas.sel.front'), onSelect: () => reorderSelected(true) },
+              { label: t('canvas.sel.back'), onSelect: () => reorderSelected(false) },
+              { label: '🔒 Alt+L', onSelect: toggleLockSelected },
+              { label: 'Ctrl+G', onSelect: () => groupSelected(false) },
+              ...(n >= 1 ? [
+                { type: 'sep' },
+                ...['👍', '❤️', '⭐', '❓'].map(em => ({ label: t('canvas.sel.react', { emoji: em }), onSelect: () => reactSelected(em) })),
+                ...(n === 1 ? [{ label: '💬 ' + t('canvas.sel.comment'), onSelect: () => setNodeCommentFor(Array.from(selected)[0]) }] : []),
+              ] : []),
+            ];
+            return <Menu anchor={selMenu} items={items} onClose={() => setSelMenu(null)} minWidth={210} label={t('cv.more')} className="cv-menu" />;
+          })()}
         </div>
       )}
       <div className={`canvas-pan-area${dragHover ? ' drag-over' : ''}${isDrawTool ? ' draw-mode' : ''}${isDrawTool && tool !== 'eraser' ? ' canvas-drawing' : ''}${tool === 'eraser' ? ' canvas-erasing' : ''} canvas-tool-${tool}`}

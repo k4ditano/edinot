@@ -1,5 +1,6 @@
 // Fichas del canvas y sus piezas (adjuntos, modal de nota, consultas, grupos, selector de notas, vista previa).
 
+import { shapeD, shapeTextBox } from './shapes.js';
 import { useI18n, t, getLang } from '../../i18n.js';
 import { useRef, useState, useMemo, useEffect, useLayoutEffect, useDeferredValue, useCallback, memo } from 'react';
 import { mountDbBlock, sweepDbBlocks } from '../db/mount.jsx';
@@ -456,16 +457,29 @@ export function CanvasTileImpl({ node, note, syncConfig, onMouseDown, onOpen, on
       }}>
       {isShape && (
         <>
-          <div style={{
-            position: 'absolute', inset: 0, boxSizing: 'border-box',
-            background: node.color || 'color-mix(in srgb, var(--accent, #2383E2) 12%, transparent)',
-            border: '1.5px solid ' + (node.color || 'var(--accent, #2383E2)'),
-            borderRadius: node.shape === 'ellipse' ? '50%' : 8,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            textAlign: 'center', padding: 10, overflow: 'hidden',
-          }}>
-            {editingText !== null ? textEditor : <div style={{ whiteSpace: 'pre-wrap', width: '100%' }}>{node.text || ''}</div>}
-          </div>
+          {(() => {
+            const sh = node.shape || 'rect';
+            const col = node.color || 'var(--accent, #2383E2)';
+            const fill = node.color ? node.color : 'color-mix(in srgb, var(--accent, #2383E2) 12%, transparent)';
+            const body = editingText !== null ? textEditor : <div style={{ whiteSpace: 'pre-wrap', width: '100%', overflowWrap: 'anywhere' }}>{node.text || ''}</div>;
+            if (sh === 'rect' || sh === 'ellipse') {
+              return (
+                <div style={{ position: 'absolute', inset: 0, boxSizing: 'border-box', background: fill, border: '1.5px solid ' + col,
+                  borderRadius: sh === 'ellipse' ? '50%' : 8, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  textAlign: 'center', padding: 10, overflow: 'hidden' }}>{body}</div>
+              );
+            }
+            const tb = shapeTextBox(sh, 0, 0, w, h);
+            return (
+              <>
+                <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} style={{ position: 'absolute', inset: 0, overflow: 'visible', pointerEvents: 'none' }} aria-hidden="true">
+                  <path d={shapeD(sh, 1, 1, Math.max(2, w - 2), Math.max(2, h - 2))} fill={fill} stroke={col} strokeWidth="1.5" strokeLinejoin="round" fillRule="evenodd" />
+                </svg>
+                <div style={{ position: 'absolute', left: tb.x, top: tb.y, width: tb.w, height: tb.h, boxSizing: 'border-box', display: 'flex',
+                  alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: 4, overflow: 'hidden' }}>{body}</div>
+              </>
+            );
+          })()}
           <button className="canvas-node-del" title={t('canvas.removeNode')}
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => { e.stopPropagation(); onDelete(node.id); }}
