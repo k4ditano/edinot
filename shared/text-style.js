@@ -9,6 +9,9 @@
 //   align       'left' | 'center' | 'right' | 'justify'
 //   wrap        true = caja de ancho fijo con saltos de línea; si no, una línea por cada salto del texto
 //   plain       sin relleno ni sombra (texto de diseño, no «post-it»)
+//   textSize    'auto' (el ancho se ajusta al texto) | 'height' (ancho fijo, alto automático: lo normal) | 'fixed' (caja fija)
+//   maxLines    recorta a N líneas con «…»;  truncate  en caja fija, recorta con «…» lo que no cabe
+//   paraSpacing px entre párrafos (cada salto de línea)      list  'bullet' | 'number' (cada línea, un punto)
 
 export const FONT_STACKS = {
   sans: "'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif",
@@ -50,7 +53,38 @@ export function labelTextStyle(n) {
   if (n.align) st.textAlign = n.align;
   if (n.wrap) { st.whiteSpace = 'pre-wrap'; st.wordBreak = 'break-word'; }
   else if (n.noWrap) st.whiteSpace = 'pre';
+  if (n.textSize === 'auto') { st.whiteSpace = 'pre'; delete st.wordBreak; }
+  const lines = clampLines(n);
+  if (lines) { st.display = '-webkit-box'; st.WebkitLineClamp = lines; st.WebkitBoxOrient = 'vertical'; st.overflow = 'hidden'; if (st.whiteSpace === 'pre') st.whiteSpace = 'pre-wrap'; }
   return st;
+}
+
+/** Líneas máximas a mostrar (con «…»): `maxLines`, o las que caben en una caja fija con `truncate`. */
+export function clampLines(n) {
+  if (n.maxLines > 0) return Math.round(n.maxLines);
+  if (n.truncate && n.textSize === 'fixed' && n.h > 0) {
+    const lh = (n.lineHeight || (n.plain ? 1.25 : 1.35)) * (n.fontSize || 20);
+    return Math.max(1, Math.floor(n.h / lh));
+  }
+  return 0;
+}
+
+/** Párrafos de una etiqueta, para pintarla con espacio entre párrafos o como lista. null = texto normal. */
+export function labelBlocks(n) {
+  if (!n.list && !(n.paraSpacing > 0)) return null;
+  const lines = String(n.text || '').split('\n');
+  return { list: n.list === 'bullet' || n.list === 'number' ? n.list : null, lines: n.list ? lines.filter(l => l.trim() !== '') : lines, spacing: n.paraSpacing > 0 ? n.paraSpacing : 0 };
+}
+
+/** HTML del texto de una etiqueta (exportar): párrafos con espacio o lista; `inline(line)` da el HTML de una línea. */
+export function labelHtml(n, inline) {
+  const b = labelBlocks(n);
+  if (!b) return null;
+  if (b.list) {
+    const tag = b.list === 'number' ? 'ol' : 'ul';
+    return `<${tag} style="margin:0;padding-left:1.3em">${b.lines.map((l, i) => `<li${b.spacing && i < b.lines.length - 1 ? ` style="margin-bottom:${b.spacing}px"` : ''}>${inline(l)}</li>`).join('')}</${tag}>`;
+  }
+  return b.lines.map((l, i) => `<p style="margin:0${b.spacing && i < b.lines.length - 1 ? `;margin-bottom:${b.spacing}px` : ''}">${l ? inline(l) : '<br>'}</p>`).join('');
 }
 
 /** El mismo estilo como atributos de SVG <text> (para exportar). */

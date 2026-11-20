@@ -28,3 +28,21 @@ test('text-shape nodes use fillVar as their colour; unknown or no links return t
 test('textStyleFrom copies typography', () => {
   assert.deepEqual(textStyleFrom({ fontSize: 18, bold: true, font: 'serif' }), { font: 'serif', fontSize: 18, weight: 700 });
 });
+
+test('modes: values per mode; numbers, strings and booleans bind to any property', async () => {
+  const { resolveVars, resolveFrameVars, varValue } = await import('../shared/canvas-vars.js');
+  const vars = {
+    modes: [{ id: 'l', name: 'Claro' }, { id: 'd', name: 'Oscuro' }], mode: 'd',
+    colors: [{ id: 'bg', name: 'Fondo', value: '#ffffff', values: { l: '#ffffff', d: '#0f172a' } }],
+    nums: [{ id: 'r', name: 'Radio', value: 8, values: { d: 20 } }, { id: 'sp', name: 'Espacio', value: 16 }],
+    strs: [{ id: 'cta', name: 'CTA', value: 'Comprar', values: { d: 'Buy' } }],
+    bools: [{ id: 'show', name: 'Banner', value: true, values: { d: false } }],
+  };
+  assert.equal(varValue(vars, 'colors', 'bg'), '#0f172a');
+  const a = resolveVars({ id: 'a', kind: 'shape', shape: 'rect', x: 0, y: 0, w: 10, h: 10, bbox: {}, fillVar: 'bg', bind: { rx: 'r', visible: 'show' } }, vars);
+  assert.deepEqual([a.fill, a.rx, a.hidden], ['#0f172a', 20, true]);
+  const l = resolveVars({ id: 'l', kind: 'label', text: 'x', bind: { text: 'cta' } }, { ...vars, mode: 'l' });
+  assert.equal(l.text, 'Comprar');
+  const g = resolveFrameVars({ id: 'g', layout: { dir: 'row', gap: 4 }, bind: { gap: 'sp' } }, vars);
+  assert.equal(g.layout.gap, 16);
+});

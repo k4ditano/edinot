@@ -17,6 +17,7 @@ import {
   seedCanvasFromJson as _canvasSeed,
   isCanvasMigrated as _canvasMigrated,
   serializeCanvasDeterministic as _canvasSerialize,
+  listCanvasVersions as _verList, readCanvasVersion as _verRead, saveCanvasVersion as _verSave, deleteCanvasVersion as _verDel,
 } from './shared/canvas-model.js';
 import { commentTypes as _commentTypes, attachLegacyBridge as _attachCommentsBridge } from './shared/comments-model.js';
 import { normalizeCollection } from './shared/collections.js';
@@ -1492,6 +1493,19 @@ export function seedCanvasFromJson(noteId, json) {
 export function applyCanvasSnapshot(noteId, next) {
   const e = noteId && getNoteDoc(noteId);
   if (e) _canvasApply(e.ydoc, next);
+}
+// Versiones con nombre de un canvas (en el documento de la nota).
+export function listCanvasVersions(noteId) { const e = noteId && getNoteDoc(noteId); return e ? _verList(e.ydoc) : []; }
+export function readCanvasVersion(noteId, id) { const e = noteId && getNoteDoc(noteId); return e ? _verRead(e.ydoc, id) : null; }
+export function saveCanvasVersion(noteId, opts) { const e = noteId && getNoteDoc(noteId); return e ? _verSave(e.ydoc, opts) : null; }
+export function deleteCanvasVersion(noteId, id) { const e = noteId && getNoteDoc(noteId); if (e) _verDel(e.ydoc, id); }
+export function observeCanvasVersions(noteId, fn) {
+  const e = noteId && getNoteDoc(noteId);
+  if (!e) return () => {};
+  const meta = _canvasTypes(e.ydoc).meta;
+  const h = () => fn();
+  meta.observeDeep(h);
+  return () => meta.unobserveDeep(h);
 }
 export function serializeCanvasDeterministic(noteId) {
   const e = noteId && getNoteDoc(noteId);

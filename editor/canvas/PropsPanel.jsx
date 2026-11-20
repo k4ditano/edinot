@@ -2,13 +2,18 @@
 // (posición, tamaño, giro, colores, grosor, opacidad, texto) y «Capas» lista todo en su orden de apilado,
 // con ocultar, bloquear y seleccionar. Se abre y se cierra desde las acciones de arriba a la derecha.
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { t, useI18n } from '../../i18n.js';
 import { mergedOrder } from './zorder.js';
 import { FONT_KEYS, FONT_STACKS, weightOf, labelTextStyle } from '../../shared/text-style.js';
 import { resolveVars, newVarId, textStyleFrom } from '../../shared/canvas-vars.js';
-import { listComponents, insertInstance } from './components.js';
+import { listComponents, insertInstance, componentProps, variantsOf } from './components.js';
 import { ENTER_TYPES, HOVER_TYPES, LOOP_TYPES, LINK_ANIMS, playEnter } from './motion.js';
+import { frameTree } from './autolayout.js';
+import { layerTree, layerItems, moveLayers, renameLayer } from './layers.js';
+import { itemCssText } from '../../shared/canvas-css.js';
+import { shadowList, BLEND_MODES } from '../../shared/canvas-effects.js';
+import { STROKE_ENDS } from './outline.js';
 
 const r1 = (n) => (Number.isFinite(n) ? Math.round(n * 10) / 10 : '');
 
@@ -104,6 +109,143 @@ function TextProps({ n, patch }) {
         <button type="button" className={n.wrap ? 'on wide' : 'wide'} title={t('cvp.wrap.h')} onClick={() => patch({ wrap: n.wrap ? undefined : true, noWrap: n.wrap ? true : undefined })}>{t('cvp.wrap')}</button>
         <button type="button" className={n.rich ? 'on wide' : 'wide'} title={t('cvp.rich.h')} onClick={() => patch({ rich: n.rich ? undefined : true })}>{t('cvp.rich')}</button>
       </div>
+      {/* Tamaño de la caja de texto (como Figma): ancho automático, alto automático o fija. */}
+      <div className="cvp-seg" role="group" aria-label={t('cvp.ts')}>
+        {[['auto', '↔'], ['height', '↕'], ['fixed', '▢']].map(([k, g]) => (
+          <button key={k} type="button" className={`wide${(n.textSize || 'height') === k ? ' on' : ''}`} title={t('cvp.ts.' + k)}
+            onClick={() => patch({ textSize: k === 'height' ? undefined : k, wrap: k === 'auto' ? undefined : true, noWrap: undefined })}>{g} {t('cvp.ts.' + k + '.s')}</button>
+        ))}
+      </div>
+      <div className="cvp-grid">
+        <Num label={t('cvp.maxLines')} value={n.maxLines || 0} min={0} max={50} onChange={(v) => patch({ maxLines: v > 0 ? v : undefined })} />
+        <Num label={t('cvp.paraSp')} value={n.paraSpacing || 0} min={0} max={200} onChange={(v) => patch({ paraSpacing: v > 0 ? v : undefined })} />
+      </div>
+      <div className="cvp-seg" role="group" aria-label={t('cvp.list')}>
+        {[['', '¶'], ['bullet', '•'], ['number', '1.']].map(([k, g]) => (
+          <button key={k || 'none'} type="button" className={(n.list || '') === k ? 'on' : ''} title={t('cvp.list.' + (k || 'none'))} onClick={() => patch({ list: k || undefined })}>{g}</button>
+        ))}
+        <span className="cvp-segsep" />
+        {n.textSize === 'fixed' && <button type="button" className={n.truncate ? 'on wide' : 'wide'} title={t('cvp.truncate.h')} onClick={() => patch({ truncate: n.truncate ? undefined : true })}>{t('cvp.truncate')}</button>}
+      </div>
+    </>
+  );
+}
+
+// Propiedades del componente: en una instancia, sus valores; en una pieza del principal, exponerla como propiedad.
+function CompProps({ json, item, library, patch, onSetProp }) {
+  if (item.cinst) {
+    const props = componentProps(json, item.cinst, library);
+    if (!props.length) return null;
+    const pieces = [...(json.nodes || []), ...(json.annotations || [])].filter(x => x.grp === item.grp && x.cinst);
+    return (
+      <>
+        <div className="cvp-h">{t('cvp.cp.title')}</div>
+        {props.map(p => {
+          const piece = pieces.find(x => x.cref === p.ref);
+          if (!piece) return null;
+          return p.type === 'bool' ? (
+            <label key={p.name} className="cvp-check"><input type="checkbox" checked={!piece.hidden} onChange={(e) => onSetProp && onSetProp(item.grp, p.name, e.target.checked)} /> {p.name}</label>
+          ) : (
+            <div key={p.name} className="cvp-color"><span>{p.name}</span>
+              <input className="cvp-hex cvp-name" defaultValue={piece.text || ''} onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter') e.currentTarget.blur(); }}
+                onBlur={(e) => { if (e.target.value !== (piece.text || '')) onSetProp && onSetProp(item.grp, p.name, e.target.value); }} />
+            </div>
+          );
+        })}
+      </>
+    );
+  }
+  if (item.cmain) {
+    return item.cprop ? (
+      <div className="cvp-color"><span>{t('cvp.cp.prop')}</span><span className="cvp-varname">{item.cprop.name}</span>
+        <button type="button" className="cvp-x" title={t('cvp.remove')} onClick={() => patch(x => { const { cprop, ...r } = x; return r; })}>×</button></div>
+    ) : (
+      <button type="button" className="cvp-add" onClick={() => {
+        const nm = window.prompt(t('cvp.cp.name'), typeof item.text === 'string' ? t('cvp.cp.defText') : t('cvp.cp.defBool'));
+        if (nm) patch(x => ({ ...x, cprop: { name: nm, type: typeof x.text === 'string' ? 'text' : 'bool' } }));
+      }}>+ {typeof item.text === 'string' ? t('cvp.cp.exposeText') : t('cvp.cp.exposeBool')}</button>
+    );
+  }
+  return null;
+}
+
+// Variables enlazadas a propiedades (números, textos, sí/no) — como «aplicar variable» en Figma.
+const BIND_PROPS = { nums: ['rx', 'strokeWidth', 'opacity', 'fontSize', 'w', 'h', 'letterSpacing', 'lineHeight'], strs: ['text'], bools: ['visible'], colors: [] };
+function BindProps({ vars, item, kind, patch }) {
+  const [prop, setProp] = useState('');
+  const all = ['nums', 'strs', 'bools'].flatMap(k => (vars[k] || []).map(v => ({ ...v, k })));
+  if (!all.length) return null;
+  const binds = item.bind || {};
+  const props = [...BIND_PROPS.nums, ...BIND_PROPS.strs, ...BIND_PROPS.bools].filter(p => (p !== 'text' || typeof item.text === 'string') && (p !== 'fontSize' || item.kind === 'label') && (p !== 'rx' || item.shape === 'rect'));
+  const kindOf = (p) => (BIND_PROPS.strs.includes(p) ? 'strs' : BIND_PROPS.bools.includes(p) ? 'bools' : 'nums');
+  const setBind = (p, id) => patch(x => { const b = { ...(x.bind || {}) }; if (id) b[p] = id; else delete b[p]; const r = { ...x }; if (Object.keys(b).length) r.bind = b; else delete r.bind; return r; });
+  return (
+    <>
+      <div className="cvp-h">{t('cvp.var.bound')}</div>
+      {Object.entries(binds).map(([p, id]) => (
+        <div key={p} className="cvp-color"><span>{t('cvp.bp.' + p)}</span><span className="cvp-varname">{(all.find(v => v.id === id) || {}).name || '?'}</span>
+          <button type="button" className="cvp-x" title={t('cvp.remove')} onClick={() => setBind(p, null)}>×</button></div>
+      ))}
+      <div className="cvp-color">
+        <select className="cvp-fit" value={prop} onChange={(e) => setProp(e.target.value)}>
+          <option value="">{t('cvp.var.bindProp')}</option>
+          {props.filter(p => !binds[p]).map(p => <option key={p} value={p}>{t('cvp.bp.' + p)}</option>)}
+        </select>
+        {prop && (
+          <select className="cvp-fit" value="" onChange={(e) => { setBind(prop, e.target.value); setProp(''); }}>
+            <option value="">{t('cvp.var.pick')}</option>
+            {all.filter(v => v.k === kindOf(prop)).map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+          </select>
+        )}
+      </div>
+    </>
+  );
+}
+
+// En el marco: tamaño dentro de un auto layout (fijo / rellenar, mín/máx, absoluta, columnas) o restricciones.
+function FrameProps({ json, item, rect, patch }) {
+  if (!rect) return null;
+  const fid = frameTree(json).ownerItem(rect);
+  const fr = fid && (json.groups || []).find(g => g.id === fid);
+  if (!fr) return null;
+  const set = (k, v) => patch(x => { const r = { ...x }; if (v == null || v === '' || v === false) delete r[k]; else r[k] = v; return r; });
+  if (fr.layout) {
+    const fillW = item.sizeW === 'fill', fillH = item.sizeH === 'fill';
+    return (
+      <>
+        <div className="cvp-h">{t('cvp.fr.title', { f: fr.title || t('canvas.groupDefault') })}</div>
+        <div className="cvp-seg" role="group" aria-label={t('cvp.fr.w')}>
+          <span className="cvp-seglab">{t('cvp.w')}</span>
+          <button type="button" className={!fillW ? 'on' : ''} onClick={() => set('sizeW', null)}>{t('cvp.fr.fixed')}</button>
+          <button type="button" className={fillW ? 'on' : ''} onClick={() => set('sizeW', 'fill')}>{t('cvp.fr.fill')}</button>
+        </div>
+        {fillW && <div className="cvp-grid"><Num label="mín" value={item.minW ?? 0} min={0} onChange={(v) => set('minW', v || null)} /><Num label="máx" value={item.maxW ?? 0} min={0} onChange={(v) => set('maxW', v || null)} /></div>}
+        <div className="cvp-seg" role="group" aria-label={t('cvp.fr.h')}>
+          <span className="cvp-seglab">{t('cvp.h')}</span>
+          <button type="button" className={!fillH ? 'on' : ''} onClick={() => set('sizeH', null)}>{t('cvp.fr.fixed')}</button>
+          <button type="button" className={fillH ? 'on' : ''} onClick={() => set('sizeH', 'fill')}>{t('cvp.fr.fill')}</button>
+        </div>
+        {fillH && <div className="cvp-grid"><Num label="mín" value={item.minH ?? 0} min={0} onChange={(v) => set('minH', v || null)} /><Num label="máx" value={item.maxH ?? 0} min={0} onChange={(v) => set('maxH', v || null)} /></div>}
+        {fr.layout.dir === 'grid' && <div className="cvp-grid"><Num label={t('cvp.fr.span')} value={item.span || 1} min={1} max={fr.layout.columns || 12} onChange={(v) => set('span', v > 1 ? Math.round(v) : null)} /></div>}
+        <label className="cvp-check"><input type="checkbox" checked={!!item.layoutAbsolute} onChange={(e) => set('layoutAbsolute', e.target.checked || null)} /> {t('cvp.fr.abs')}</label>
+      </>
+    );
+  }
+  const c = item.constraints || {};
+  const setC = (k, v) => patch(x => { const cc = { ...(x.constraints || {}) }; if (!v || v === (k === 'h' ? 'left' : 'top')) delete cc[k]; else cc[k] = v; const r = { ...x }; if (Object.keys(cc).length) r.constraints = cc; else delete r.constraints; return r; });
+  return (
+    <>
+      <div className="cvp-h">{t('cvp.fr.cons', { f: fr.title || t('canvas.groupDefault') })}</div>
+      <label className="cvp-row"><span>{t('cvp.fr.ch')}</span>
+        <select value={c.h || 'left'} onChange={(e) => setC('h', e.target.value)}>
+          {['left', 'right', 'center', 'stretch', 'scale'].map(v => <option key={v} value={v}>{t('cvp.fr.c.' + v)}</option>)}
+        </select>
+      </label>
+      <label className="cvp-row"><span>{t('cvp.fr.cv')}</span>
+        <select value={c.v || 'top'} onChange={(e) => setC('v', e.target.value)}>
+          {['top', 'bottom', 'center', 'stretch', 'scale'].map(v => <option key={v} value={v}>{t('cvp.fr.c.' + v)}</option>)}
+        </select>
+      </label>
     </>
   );
 }
@@ -156,13 +298,252 @@ function AnimProps({ item, kind, patch }) {
   );
 }
 
+// Varios rellenos y bordes, sombras (varias, con extensión, interiores) y modo de fusión — como en Figma.
+function PaintLists({ a, patch, pen }) {
+  const shadows = shadowList(a);
+  const setShadows = (fn) => patch(x => { const list = fn(shadowList(x)); const { shadow, innerShadow, ...r } = x; if (list.length) r.shadows = list; else delete r.shadows; return r; });
+  const setList = (key, fn) => patch(x => { const l = fn([...(x[key] || [])]); const r = { ...x }; if (l.length) r[key] = l; else delete r[key]; return r; });
+  const col = (v, on) => (
+    <label className="cvp-swatch" style={{ background: v }}><input type="color" value={HEX.test(v || '') ? v : '#000000'} onChange={(e) => on(e.target.value)} /></label>
+  );
+  const open = (a.kind === 'path' && !a.variant) || (a.kind === 'shape' && (a.shape === 'line' || a.shape === 'arrow'));
+  const hasStroke = a.color && a.color !== 'none';
+  const setK = (k, v) => patch(x => { const r = { ...x }; if (v == null || v === '') delete r[k]; else r[k] = v; return r; });
+  return (
+    <>
+      {!pen && hasStroke && (<>
+        <div className="cvp-h">{t('cvp.strokeOpts')}</div>
+        <div className="cvp-seg" role="group" aria-label={t('cvp.cap')}>
+          {[['butt', '⎯'], ['round', '◖'], ['square', '▮']].map(([k, g]) => (
+            <button key={k} type="button" className={(a.strokeCap || (a.kind === 'path' ? 'round' : 'round')) === k ? 'on' : ''} title={t('cvp.cap.' + k)} onClick={() => setK('strokeCap', k)}>{g}</button>
+          ))}
+          <span className="cvp-segsep" />
+          {[['miter', '⌐'], ['round', '◜'], ['bevel', '⌙']].map(([k, g]) => (
+            <button key={k} type="button" className={(a.strokeJoin || 'round') === k ? 'on' : ''} title={t('cvp.join.' + k)} onClick={() => setK('strokeJoin', k)}>{g}</button>
+          ))}
+        </div>
+        {open && a.shape !== 'arrow' && (
+          <div className="cvp-color">
+            <span>{t('cvp.ends')}</span>
+            {['startCap', 'endCap'].map(k => (
+              <select key={k} className="cvp-fit" value={a[k] || 'none'} title={t('cvp.' + k)} onChange={(e) => setK(k, e.target.value === 'none' ? null : e.target.value)}>
+                {STROKE_ENDS.map(m => <option key={m} value={m}>{t('cvp.end.' + m)}</option>)}
+              </select>
+            ))}
+          </div>
+        )}
+        <label className="cvp-row"><span>{t('cvp.dash')}</span>
+          <input className="cvp-hex" placeholder="8 4" value={a.dash && a.dash !== 'solid' ? (a.dash === 'dashed' ? '8 4' : a.dash === 'dotted' ? '2 4' : a.dash) : ''} onKeyDown={(e) => e.stopPropagation()}
+            onChange={(e) => setK('dash', e.target.value.trim() || null)} />
+        </label>
+      </>)}
+      {!pen && (<>
+        <div className="cvp-h">{t('cvp.fills')}</div>
+        {(a.fills || []).map((f, i) => (
+          <div key={i} className="cvp-color">
+            {col(f.color, (v) => setList('fills', l => { l[i] = { ...l[i], color: v }; return l; }))}
+            <Num label="%" value={Math.round((f.opacity ?? 1) * 100)} min={0} max={100} onChange={(v) => setList('fills', l => { l[i] = { ...l[i], opacity: v / 100 }; return l; })} />
+            <select className="cvp-fit" value={f.blend || 'normal'} title={t('cvp.blend')} onChange={(e) => setList('fills', l => { l[i] = { ...l[i], blend: e.target.value === 'normal' ? undefined : e.target.value }; return l; })}>
+              {BLEND_MODES.map(m => <option key={m} value={m}>{t('cvp.bl.' + m)}</option>)}
+            </select>
+            <button type="button" className="cvp-x" title={t('cvp.remove')} onClick={() => setList('fills', l => l.filter((_, k) => k !== i))}>×</button>
+          </div>
+        ))}
+        <button type="button" className="cvp-add" onClick={() => setList('fills', l => [...l, { color: '#000000', opacity: 0.2 }])}>+ {t('cvp.fill.add')}</button>
+        <div className="cvp-h">{t('cvp.strokes')}</div>
+        {(a.strokes || []).map((st, i) => (
+          <div key={i} className="cvp-color">
+            {col(st.color, (v) => setList('strokes', l => { l[i] = { ...l[i], color: v }; return l; }))}
+            <Num label="px" value={st.width ?? 1} min={0} max={60} step={0.5} onChange={(v) => setList('strokes', l => { l[i] = { ...l[i], width: v }; return l; })} />
+            <Num label="%" value={Math.round((st.opacity ?? 1) * 100)} min={0} max={100} onChange={(v) => setList('strokes', l => { l[i] = { ...l[i], opacity: v / 100 }; return l; })} />
+            <button type="button" className="cvp-x" title={t('cvp.remove')} onClick={() => setList('strokes', l => l.filter((_, k) => k !== i))}>×</button>
+          </div>
+        ))}
+        <button type="button" className="cvp-add" onClick={() => setList('strokes', l => [...l, { color: '#ffffff', width: 2 }])}>+ {t('cvp.stroke.add')}</button>
+      </>)}
+      <div className="cvp-h">{t('cvp.effects')}</div>
+      {shadows.map((sh, i) => (
+        <div key={i} className="cvp-inter">
+          <div className="cvp-color">
+            <select className="cvp-fit" value={sh.inner ? 'inner' : 'drop'} onChange={(e) => setShadows(l => { l[i] = { ...l[i], inner: e.target.value === 'inner' }; return l; })}>
+              <option value="drop">{t('cvp.shadow')}</option><option value="inner">{t('cvp.inner')}</option>
+            </select>
+            {col(sh.color || '#000000', (v) => setShadows(l => { l[i] = { ...l[i], color: v }; return l; }))}
+            <Num label="%" value={Math.round((sh.opacity ?? 0.25) * 100)} min={0} max={100} onChange={(v) => setShadows(l => { l[i] = { ...l[i], opacity: v / 100 }; return l; })} />
+            <button type="button" className="cvp-x" title={t('cvp.remove')} onClick={() => setShadows(l => l.filter((_, k) => k !== i))}>×</button>
+          </div>
+          <div className="cvp-grid">
+            <Num label="X" value={sh.dx ?? 0} onChange={(v) => setShadows(l => { l[i] = { ...l[i], dx: v }; return l; })} />
+            <Num label="Y" value={sh.dy ?? 4} onChange={(v) => setShadows(l => { l[i] = { ...l[i], dy: v }; return l; })} />
+            <Num label={t('cvp.blur')} value={sh.blur ?? 6} min={0} onChange={(v) => setShadows(l => { l[i] = { ...l[i], blur: v }; return l; })} />
+            <Num label={t('cvp.spread')} value={sh.spread ?? 0} onChange={(v) => setShadows(l => { l[i] = { ...l[i], spread: v || undefined }; return l; })} />
+          </div>
+        </div>
+      ))}
+      <button type="button" className="cvp-add" onClick={() => setShadows(l => [...l, { dx: 0, dy: 6, blur: 10, color: '#000000', opacity: 0.2 }])}>+ {t('cvp.shadow')}</button>
+      <label className="cvp-row"><span>{t('cvp.blend')}</span>
+        <select value={a.blend || 'normal'} onChange={(e) => patch(x => { const r = { ...x }; if (e.target.value === 'normal') delete r.blend; else r.blend = e.target.value; return r; })}>
+          {BLEND_MODES.map(m => <option key={m} value={m}>{t('cvp.bl.' + m)}</option>)}
+        </select>
+      </label>
+    </>
+  );
+}
+
+// Capas en árbol: marcos → grupos/instancias → piezas; plegar, renombrar (doble clic) y arrastrar para reordenar.
+function LayerTree({ json, byId, selected, selAnno, select, toggle, onChange }) {
+  const [closed, setClosed] = useState(() => new Set());
+  const [editing, setEditing] = useState(null);
+  const [drop, setDrop] = useState(null);   // { key, above }
+  const dragRef = useRef(null);
+  const tree = layerTree(json);
+  const keyOf = (n) => (n.kind === 'frame' ? 'f' + n.id : n.kind === 'group' ? 'g' + n.grp : n.type + n.id);
+  const isOn = (n) => { const its = layerItems(n); return its.length > 0 && its.every(i => (i.type === 'n' ? selected.has(i.id) : selAnno.has(i.id))); };
+  const selectNode = (n, add) => { const its = layerItems(n); its.forEach((i, k) => select(i, add || k > 0)); };
+  const anchor = (n) => { const its = layerItems(n); return its[0] || null; };
+  const label = (n) => {
+    if (n.kind === 'frame') return (n.section ? '▭ ' : '# ') + (n.title || t('canvas.present.untitled'));
+    if (n.kind === 'group') {
+      let nm = n.name;
+      if (!nm && n.cref) { const m = [...(json.nodes || []), ...(json.annotations || [])].find(x => x.cmain === n.cref); nm = m && m.cname; }
+      return (n.comp === 'main' ? '◆ ' : n.comp === 'inst' ? '◇ ' : '▣ ') + (nm || t('cvp.lay.group'));
+    }
+    const el = byId.get(n.type + n.id);
+    return el ? (el.grp ? nameOf0({ type: n.type, id: n.id }, el) : nameOf({ type: n.type, id: n.id }, el)) : '?';
+  };
+  const rename = (n, v) => { setEditing(null); onChange(j => renameLayer(j, n, v)); };
+  const row = (n, depth) => {
+    const k = keyOf(n);
+    const kids = n.children && n.children.length ? n.children : null;
+    const el = n.kind === 'item' ? byId.get(n.type + n.id) : null;
+    if (n.kind === 'item' && !el) return null;
+    const on = isOn(n);
+    const cur = n.kind === 'frame' ? n.title : n.kind === 'group' ? n.name : (el && el.name) || '';
+    return (
+      <li key={k}>
+        <div className={`cvp-lrow${on ? ' on' : ''}${el && el.hidden ? ' off' : ''}${drop && drop.key === k ? (drop.above ? ' drop-above' : ' drop-below') : ''}`}
+          style={{ paddingLeft: 4 + depth * 14 }}
+          draggable={n.kind !== 'frame' && editing !== k}
+          onDragStart={(e) => { dragRef.current = n; e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', k); } catch {} }}
+          onDragOver={(e) => { if (!dragRef.current || n.kind === 'frame') return; e.preventDefault(); const r = e.currentTarget.getBoundingClientRect(); setDrop({ key: k, above: e.clientY < r.top + r.height / 2 }); }}
+          onDragLeave={() => setDrop(d => (d && d.key === k ? null : d))}
+          onDrop={(e) => {
+            e.preventDefault();
+            const from = dragRef.current; dragRef.current = null; setDrop(null);
+            if (!from || n.kind === 'frame') return;
+            const r = e.currentTarget.getBoundingClientRect();
+            const above = e.clientY < r.top + r.height / 2;
+            // Encima de la primera pieza de la fila (o debajo de la última), en el orden de apilado.
+            const its = layerItems(n);
+            const target = above ? its[0] : its[its.length - 1];
+            if (target) onChange(j => moveLayers(j, layerItems(from), target, above));
+          }}
+          onDragEnd={() => { dragRef.current = null; setDrop(null); }}>
+          {kids ? <button type="button" className="cvp-ltog" onClick={() => setClosed(c => { const x = new Set(c); if (x.has(k)) x.delete(k); else x.add(k); return x; })}>{closed.has(k) ? '▸' : '▾'}</button> : <span className="cvp-ltog" />}
+          {editing === k ? (
+            <input className="cvp-lrename" autoFocus defaultValue={cur} onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter') rename(n, e.currentTarget.value); if (e.key === 'Escape') setEditing(null); }} onBlur={(e) => rename(n, e.target.value)} />
+          ) : (
+            <button type="button" className="cvp-lname" onClick={(e) => (n.kind === 'frame' ? selectNode(n, e.shiftKey) : selectNode(n, e.shiftKey))} onDoubleClick={() => setEditing(k)}>{label(n)}</button>
+          )}
+          {el && <button type="button" className={`cvp-ic${el.hidden ? ' act' : ''}`} title={t(el.hidden ? 'cvp.show' : 'cvp.hide')} onClick={() => toggle({ type: n.type, id: n.id }, 'hidden')}>{el.hidden ? '◌' : '◉'}</button>}
+          {el && <button type="button" className={`cvp-ic${el.locked ? ' act' : ''}`} title={t(el.locked ? 'cvp.unlock' : 'cvp.lock')} onClick={() => toggle({ type: n.type, id: n.id }, 'locked')}>{el.locked ? '🔒' : '🔓'}</button>}
+        </div>
+        {kids && !closed.has(k) && <ul>{kids.map(c => row(c, depth + 1))}</ul>}
+      </li>
+    );
+  };
+  if (!tree.length) return <div className="cvp-body"><p className="cvp-empty">{t('cvp.lay.empty')}</p></div>;
+  return <ul className="cvp-layers cvp-ltree">{tree.map(n => row(n, 0))}</ul>;
+}
+
+// Modo desarrollador: CSS de la capa, medidas y exportar (PNG 1x/2x/3x, SVG). Alt sobre otro elemento mide distancias.
+function CodeTab({ item, count, onExport }) {
+  const [copied, setCopied] = useState(false);
+  if (!count) return <div className="cvp-body"><p className="cvp-empty">{t('cvp.code.empty')}</p></div>;
+  const r = item ? (item.bbox ? { x: item.bbox.x + (item.ox || 0), y: item.bbox.y + (item.oy || 0), w: item.bbox.w, h: item.bbox.h } : { x: item.x || 0, y: item.y || 0, w: item.w || 0, h: item.h || 0 }) : null;
+  const css = item ? itemCssText(item) : '';
+  return (
+    <div className="cvp-body">
+      {r && (<>
+        <div className="cvp-h">{t('cvp.code.box')}</div>
+        <div className="cvp-code-box">{Math.round(r.w)} × {Math.round(r.h)} <span>· x {Math.round(r.x)} · y {Math.round(r.y)}</span></div>
+      </>)}
+      {item && (<>
+        <div className="cvp-h">CSS <button type="button" className="cvp-chip" style={{ float: 'right' }} onClick={() => { try { navigator.clipboard.writeText(css); setCopied(true); setTimeout(() => setCopied(false), 1200); } catch {} }}>{copied ? '✓' : t('cvp.code.copy')}</button></div>
+        <pre className="cvp-code">{css}</pre>
+      </>)}
+      <div className="cvp-h">{t('cvp.code.export')}</div>
+      <div className="cvp-modes">
+        {[1, 2, 3].map(sc => <button key={sc} type="button" className="cvp-chip" onClick={() => onExport && onExport('png', sc)}>PNG {sc}x</button>)}
+        <button type="button" className="cvp-chip" onClick={() => onExport && onExport('svg')}>SVG</button>
+      </div>
+      <p className="cvp-empty">{t('cvp.code.hint')}</p>
+    </div>
+  );
+}
+
+// Interacciones del prototipo: disparador → acción (como el panel «Prototype» de Figma).
+const I_TRIGGERS = ['click', 'hover', 'press', 'delay', 'key'];
+const I_ACTIONS = ['navigate', 'back', 'overlay', 'close', 'scrollTo', 'variant', 'setVar', 'url'];
+function InterProps({ json, item, patch }) {
+  const list = Array.isArray(item.interactions) ? item.interactions : [];
+  const frames = json.groups || [];
+  const vars = json.vars || {};
+  const allVars = ['nums', 'strs', 'bools'].flatMap(k => (vars[k] || []).map(v => ({ ...v, k })));
+  const variants = item.cinst ? variantsOf(json, item.cinst) : [];
+  const setAt = (i, ch) => patch(x => { const l = [...(x.interactions || [])]; l[i] = { ...l[i], ...ch }; for (const k of Object.keys(l[i])) if (l[i][k] == null || l[i][k] === '') delete l[i][k]; return { ...x, interactions: l }; });
+  const delAt = (i) => patch(x => { const l = (x.interactions || []).filter((_, k) => k !== i); const r = { ...x }; if (l.length) r.interactions = l; else delete r.interactions; return r; });
+  const sel = (value, opts, on, ph) => (
+    <select className="cvp-fit" value={value ?? ''} onChange={(e) => on(e.target.value || null)}>
+      {ph && <option value="">{ph}</option>}
+      {opts.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
+    </select>
+  );
+  return (
+    <>
+      <div className="cvp-h">{t('cvp.int.title')}</div>
+      {list.map((it, i) => (
+        <div key={i} className="cvp-inter">
+          <div className="cvp-color">
+            {sel(it.trigger, I_TRIGGERS.map(v => ({ v, l: t('cvp.int.tr.' + v) })), (v) => setAt(i, { trigger: v }))}
+            {it.trigger === 'delay' && <input className="cvp-hex cvp-val" type="number" value={it.delay ?? 800} onKeyDown={(e) => e.stopPropagation()} onChange={(e) => setAt(i, { delay: Number(e.target.value) })} />}
+            {it.trigger === 'key' && <input className="cvp-hex cvp-val" placeholder="Enter" value={it.key || ''} onKeyDown={(e) => { e.stopPropagation(); if (e.key.length > 1 && e.key !== 'Backspace') { e.preventDefault(); setAt(i, { key: e.key }); } }} onChange={(e) => setAt(i, { key: e.target.value.slice(-1) })} />}
+            <button type="button" className="cvp-x" title={t('cvp.remove')} onClick={() => delAt(i)}>×</button>
+          </div>
+          <div className="cvp-color">
+            {sel(it.action, I_ACTIONS.map(v => ({ v, l: t('cvp.int.ac.' + v) })), (v) => setAt(i, { action: v }))}
+            {(it.action === 'navigate' || it.action === 'overlay') && sel(it.target, frames.map(g => ({ v: g.id, l: g.title || g.id })), (v) => setAt(i, { target: v }), t('cvp.int.frame'))}
+            {it.action === 'variant' && sel(it.target, variants.map(v => ({ v: v.id, l: v.variant })), (v) => setAt(i, { target: v }), t('cvp.int.variant'))}
+            {it.action === 'scrollTo' && sel(it.target, [...(json.nodes || []), ...(json.annotations || [])].filter(x => x.name || x.text).slice(0, 200).map(x => ({ v: x.id, l: String(x.name || x.text).slice(0, 30) })), (v) => setAt(i, { target: v }), t('cvp.int.item'))}
+            {it.action === 'url' && <input className="cvp-hex cvp-name" placeholder="https://" value={it.target || ''} onKeyDown={(e) => e.stopPropagation()} onChange={(e) => setAt(i, { target: e.target.value })} />}
+          </div>
+          {it.action === 'navigate' && <div className="cvp-color">{sel(it.anim || 'move', LINK_ANIMS.map(v => ({ v, l: t('cvp.anim.t.' + v) })), (v) => setAt(i, { anim: v }))}</div>}
+          {it.action === 'setVar' && (
+            <div className="cvp-color">
+              {sel(it.var, allVars.map(v => ({ v: v.id, l: v.name })), (v) => setAt(i, { var: v }), t('cvp.var.pick'))}
+              <input className="cvp-hex cvp-val" placeholder={t('cvp.int.value')} title={t('cvp.int.valueHint')} value={it.value ?? ''} onKeyDown={(e) => e.stopPropagation()} onChange={(e) => setAt(i, { value: e.target.value })} />
+            </div>
+          )}
+          {allVars.length > 0 && (
+            <div className="cvp-color"><span>{t('cvp.int.if')}</span>
+              {sel(it.if && it.if.var, allVars.map(v => ({ v: v.id, l: v.name })), (v) => setAt(i, { if: v ? { var: v, eq: (it.if && it.if.eq) ?? 'true' } : null }), t('cvp.int.always'))}
+              {it.if && <input className="cvp-hex cvp-val" value={it.if.eq ?? ''} onKeyDown={(e) => e.stopPropagation()} onChange={(e) => setAt(i, { if: { ...it.if, eq: e.target.value } })} />}
+            </div>
+          )}
+        </div>
+      ))}
+      <button type="button" className="cvp-add" onClick={() => patch(x => ({ ...x, interactions: [...(x.interactions || []), { trigger: 'click', action: 'navigate' }] }))}>+ {t('cvp.int.add')}</button>
+    </>
+  );
+}
+
 const nameOf = (it, el) => {
   if (!el) return '?';
   const pre = el.cmain ? '◆ ' + (el.cname || '') + ' · ' : el.cinst ? '◇ ' : '';
   return pre + nameOf0(it, el);
 };
 const nameOf0 = (it, el) => {
-  const txt = String(el.text || el.title || el.label || el.name || el.noteName || '').split('\n')[0].trim();
+  const txt = String(el.name || el.text || el.title || el.label || el.noteName || '').split('\n')[0].trim();
   if (it.type === 'n') {
     const k = el.kind === 'shape' ? t('cvp.k.shape') : el.kind === 'label' ? t('cvp.k.label') : el.sticky ? t('cvp.k.sticky') : el.kind === 'page' ? t('cvp.k.page') : el.kind === 'image' ? t('cvp.k.image') : el.kind === 'note' ? t('cvp.k.note') : t('cvp.k.card');
     return txt ? `${k} · ${txt.slice(0, 28)}` : k;
@@ -171,14 +552,14 @@ const nameOf0 = (it, el) => {
   return txt ? `${k} · ${txt.slice(0, 28)}` : k;
 };
 
-export function CanvasPropsPanel({ json, selected, selAnno, onChange, select, onClose, uploadImage, library = [], onInsertLib, onRemoveLib }) {
+export function CanvasPropsPanel({ json, selected, selAnno, onChange, select, onClose, uploadImage, library = [], onInsertLib, onRemoveLib, onSetInstanceProp, onExport, cropEdit, onCropEdit, pages = [], curPage, onSetPage, onAddPage, onRenamePage, onRemovePage }) {
   useI18n();
   const [tab, setTab] = useState('design');
   const nodes = json.nodes || [], annos = json.annotations || [];
   const vars = json.vars || {};
   const selN = nodes.filter(n => selected.has(n.id)).map(n => resolveVars(n, json.vars));
   const selA = annos.filter(a => selAnno.has(a.id)).map(a => resolveVars(a, json.vars));
-  const setVars = (fn) => onChange(j => ({ ...j, vars: fn({ colors: [], texts: [], ...(j.vars || {}) }) }));
+  const setVars = (fn) => onChange(j => ({ ...j, vars: fn({ colors: [], texts: [], nums: [], strs: [], bools: [], modes: [], ...(j.vars || {}) }) }));
   const linkKey = (key, v) => (x) => { const r = { ...x }; if (v) r[key] = v; else delete r[key]; return r; };
   const unlink = (...keys) => (x) => { const r = { ...x }; for (const k of keys) delete r[k]; return r; };
   const patchNode = (id, p) => onChange(j => ({ ...j, nodes: (j.nodes || []).map(n => {
@@ -285,6 +666,22 @@ export function CanvasPropsPanel({ json, selected, selAnno, onChange, select, on
             }} />
           </label>
         ) : null)}
+        {a.imageFill && a.imageFill.src && (() => {
+          const f = a.imageFill;
+          const setF = (k, v) => patchAnno(a.id, x => { const nf = { ...x.imageFill }; if (v === 0 || v == null) delete nf[k]; else nf[k] = v; return { ...x, imageFill: nf }; });
+          return (<>
+            <div className="cvp-modes">
+              <button type="button" className={`cvp-chip${cropEdit === a.id ? ' on' : ''}`} title={t('cvp.img.crop.h')} onClick={() => onCropEdit && onCropEdit(cropEdit === a.id ? null : a.id)}>✥ {t('cvp.img.crop')}</button>
+              {(f.scale || f.ox || f.oy) ? <button type="button" className="cvp-chip" onClick={() => patchAnno(a.id, x => { const { scale, ox, oy, ...nf } = x.imageFill; return { ...x, imageFill: nf }; })}>{t('cvp.img.reset')}</button> : null}
+            </div>
+            <div className="cvp-grid">
+              <Num label={t('cvp.img.zoom')} value={Math.round((f.scale || 1) * 100)} min={100} max={800} suffix="%" onChange={(v) => setF('scale', v > 100 ? v / 100 : 0)} />
+              <Num label={t('cvp.img.exp')} value={Math.round((f.exposure || 0) * 100)} min={-100} max={100} onChange={(v) => setF('exposure', v / 100)} />
+              <Num label={t('cvp.img.con')} value={Math.round((f.contrast || 0) * 100)} min={-100} max={100} onChange={(v) => setF('contrast', v / 100)} />
+              <Num label={t('cvp.img.sat')} value={Math.round((f.saturation || 0) * 100)} min={-100} max={100} onChange={(v) => setF('saturation', v / 100)} />
+            </div>
+          </>);
+        })()}
         {(isBox || (a.kind === 'path' && !a.variant)) && (a.gradient ? (
           <div className="cvp-color">
             <span>{t('cvp.gradient')}</span>
@@ -318,14 +715,14 @@ export function CanvasPropsPanel({ json, selected, selAnno, onChange, select, on
             </div>
           </>
         )}
-        {a.innerShadow ? (
-          <div className="cvp-color">
-            <span>{t('cvp.inner')}</span>
-            <Num label="Y" value={a.innerShadow.dy ?? 2} onChange={(v) => patchAnno(a.id, x => ({ ...x, innerShadow: { ...x.innerShadow, dy: v } }))} />
-            <Num label={t('cvp.blur')} value={a.innerShadow.blur ?? 4} min={0} onChange={(v) => patchAnno(a.id, x => ({ ...x, innerShadow: { ...x.innerShadow, blur: v } }))} />
-            <button type="button" className="cvp-x" title={t('cvp.remove')} onClick={() => patchAnno(a.id, x => { const { innerShadow, ...r } = x; return r; })}>×</button>
-          </div>
-        ) : <button type="button" className="cvp-add" onClick={() => patchAnno(a.id, x => ({ ...x, innerShadow: { dx: 0, dy: 2, blur: 4, color: '#000000', opacity: 0.25 } }))}>+ {t('cvp.inner')}</button>}
+        <PaintLists a={a} patch={(fn) => patchAnno(a.id, fn)} pen={pen} />
+        {annos.some(x => x.clipTo === a.id) && (
+          <label className="cvp-row"><span>{t('cvp.maskType')}</span>
+            <select value={a.maskType || 'vector'} onChange={(e) => patchAnno(a.id, x => { const r = { ...x }; if (e.target.value === 'vector') delete r.maskType; else r.maskType = e.target.value; return r; })}>
+              <option value="vector">{t('cvp.mask.vector')}</option><option value="alpha">{t('cvp.mask.alpha')}</option><option value="luminance">{t('cvp.mask.luminance')}</option>
+            </select>
+          </label>
+        )}
         {a.blur > 0 ? (
           <div className="cvp-color"><span>{t('cvp.layerBlur')}</span>
             <Num label="px" value={a.blur} min={0} max={200} onChange={(v) => patchAnno(a.id, x => ({ ...x, blur: v }))} />
@@ -338,16 +735,6 @@ export function CanvasPropsPanel({ json, selected, selAnno, onChange, select, on
             <button type="button" className="cvp-x" title={t('cvp.remove')} onClick={() => patchAnno(a.id, x => { const { bgBlur, ...r } = x; return r; })}>×</button>
           </div>
         ) : <button type="button" className="cvp-add" onClick={() => patchAnno(a.id, x => ({ ...x, bgBlur: 16 }))}>+ {t('cvp.bgBlur')}</button>)}
-        {a.shadow ? (
-          <div className="cvp-color">
-            <span>{t('cvp.shadow')}</span>
-            <Num label="Y" value={a.shadow.dy ?? 4} onChange={(v) => patchAnno(a.id, x => ({ ...x, shadow: { ...x.shadow, dy: v } }))} />
-            <Num label={t('cvp.blur')} value={a.shadow.blur ?? 6} min={0} onChange={(v) => patchAnno(a.id, x => ({ ...x, shadow: { ...x.shadow, blur: v } }))} />
-            <button type="button" className="cvp-x" title={t('cvp.remove')} onClick={() => patchAnno(a.id, x => { const { shadow, ...r } = x; return r; })}>×</button>
-          </div>
-        ) : (
-          <button type="button" className="cvp-add" onClick={() => patchAnno(a.id, x => ({ ...x, shadow: { dx: 0, dy: 6, blur: 10, color: '#000000', opacity: 0.2 } }))}>+ {t('cvp.shadow')}</button>
-        )}
         <div className="cvp-grid">
           {!pen && <Num label={t('cvp.weight')} value={a.strokeWidth || 2} min={0} max={60} step={0.5} onChange={(v) => patchAnno(a.id, x => ({ ...x, strokeWidth: v }))} />}
           <Num label={t('cvp.opacity')} value={Math.round((a.opacity != null ? a.opacity : 1) * 100)} min={0} max={100} suffix="%" onChange={(v) => patchAnno(a.id, x => ({ ...x, opacity: v / 100 }))} />
@@ -362,7 +749,9 @@ export function CanvasPropsPanel({ json, selected, selAnno, onChange, select, on
     const patchOne = (fn) => (kind === 'n'
       ? onChange(j => ({ ...j, nodes: (j.nodes || []).map(x => x.id === one.id ? fn(x) : x) }))
       : patchAnno(one.id, fn));
-    design = <>{design}<AnimProps item={raw || one} kind={kind} patch={patchOne} /></>;
+    const it1 = raw || one;
+    const rect1 = kind === 'n' ? { x: it1.x || 0, y: it1.y || 0, w: it1.w || 240, h: it1.h || 140 } : (it1.bbox ? { x: it1.bbox.x + (it1.ox || 0), y: it1.bbox.y + (it1.oy || 0), w: it1.bbox.w, h: it1.bbox.h } : null);
+    design = <>{design}<CompProps json={json} item={it1} library={library} patch={patchOne} onSetProp={onSetInstanceProp} /><BindProps vars={vars} item={it1} kind={kind} patch={patchOne} /><FrameProps json={json} item={it1} rect={rect1} patch={patchOne} /><AnimProps item={it1} kind={kind} patch={patchOne} /><InterProps json={json} item={it1} patch={patchOne} /></>;
   }
   const order = mergedOrder(json).slice().reverse();
   const byId = new Map([...nodes.map(n => ['n' + n.id, n]), ...annos.map(a => ['a' + a.id, a])]);
@@ -377,25 +766,68 @@ export function CanvasPropsPanel({ json, selected, selAnno, onChange, select, on
         <button type="button" role="tab" aria-selected={tab === 'design'} className={tab === 'design' ? 'on' : ''} onClick={() => setTab('design')}>{t('cvp.design')}</button>
         <button type="button" role="tab" aria-selected={tab === 'layers'} className={tab === 'layers' ? 'on' : ''} onClick={() => setTab('layers')}>{t('cvp.layers')}</button>
         <button type="button" role="tab" aria-selected={tab === 'styles'} className={tab === 'styles' ? 'on' : ''} onClick={() => setTab('styles')}>{t('cvp.styles')}</button>
+        <button type="button" role="tab" aria-selected={tab === 'code'} className={tab === 'code' ? 'on' : ''} onClick={() => setTab('code')}>{t('cvp.code')}</button>
         <button type="button" className="cvp-close" onClick={onClose} aria-label={t('btn.close')}>×</button>
       </div>
-      {tab === 'styles' ? (
+      {tab === 'code' ? (
+        <CodeTab item={selN.length + selA.length === 1 ? resolveVars((selN[0] ? nodes.find(x => x.id === selN[0].id) : annos.find(x => x.id === selA[0].id)) || selN[0] || selA[0], vars) : null} count={selN.length + selA.length} onExport={onExport} />
+      ) : tab === 'styles' ? (
         <div className="cvp-body">
-          <div className="cvp-h">{t('cvp.var.colors')}</div>
-          {(vars.colors || []).map(c => (
-            <div key={c.id} className="cvp-color">
-              <label className="cvp-swatch" style={{ background: c.value }}>
-                <input type="color" value={HEX.test(c.value) ? c.value : '#000000'} onChange={(e) => setVars(v => ({ ...v, colors: v.colors.map(x => x.id === c.id ? { ...x, value: e.target.value } : x) }))} />
-              </label>
-              <input className="cvp-hex cvp-name" value={c.name} spellCheck={false} onKeyDown={(e) => e.stopPropagation()}
-                onChange={(e) => setVars(v => ({ ...v, colors: v.colors.map(x => x.id === c.id ? { ...x, name: e.target.value } : x) }))} />
-              <button type="button" className="cvp-x" title={t('cvp.remove')} onClick={() => setVars(v => ({ ...v, colors: v.colors.filter(x => x.id !== c.id) }))}>×</button>
+          {/* Modos (Claro / Oscuro…): cambiar de modo cambia todo lo enlazado a variables. */}
+          <div className="cvp-h">{t('cvp.var.modes')}</div>
+          {(vars.modes || []).length ? (
+            <div className="cvp-modes">
+              {vars.modes.map(m => (
+                <button key={m.id} type="button" className={`cvp-chip${(vars.mode || vars.modes[0].id) === m.id ? ' on' : ''}`}
+                  onClick={() => setVars(v => ({ ...v, mode: m.id }))}
+                  onDoubleClick={() => { const nm = window.prompt(t('cvp.var.modeName'), m.name); if (nm) setVars(v => ({ ...v, modes: v.modes.map(x => x.id === m.id ? { ...x, name: nm } : x) })); }}>{m.name}</button>
+              ))}
+              <button type="button" className="cvp-chip" title={t('cvp.var.addMode')} onClick={() => setVars(v => { const id = newVarId('m'); return { ...v, modes: [...v.modes, { id, name: t('cvp.var.modeN', { n: v.modes.length + 1 }) }] }; })}>+</button>
+            </div>
+          ) : (
+            <button type="button" className="cvp-add" onClick={() => setVars(v => {
+              const l = newVarId('m'), d = newVarId('m');
+              const seed = (list) => (list || []).map(x => ({ ...x, values: { [l]: x.value, [d]: x.value, ...(x.values || {}) } }));
+              return { ...v, modes: [{ id: l, name: t('cvp.var.light') }, { id: d, name: t('cvp.var.dark') }], mode: l, colors: seed(v.colors), nums: seed(v.nums), strs: seed(v.strs), bools: seed(v.bools) };
+            })}>+ {t('cvp.var.addModes')}</button>
+          )}
+          {[
+            { kind: 'colors', title: t('cvp.var.colors'), add: t('cvp.var.addColor'), def: '#6366f1' },
+            { kind: 'nums', title: t('cvp.var.nums'), add: t('cvp.var.addNum'), def: 16 },
+            { kind: 'strs', title: t('cvp.var.strs'), add: t('cvp.var.addStr'), def: 'Texto' },
+            { kind: 'bools', title: t('cvp.var.bools'), add: t('cvp.var.addBool'), def: true },
+          ].map(({ kind, title, add, def }) => (
+            <div key={kind} className="cvp-varblock">
+              <div className="cvp-h">{title}</div>
+              {(vars[kind] || []).map(c => {
+                const mode = (vars.modes || []).length ? (vars.mode || vars.modes[0].id) : null;
+                const cur = mode && c.values && c.values[mode] !== undefined ? c.values[mode] : c.value;
+                const setVal = (val) => setVars(v => ({ ...v, [kind]: v[kind].map(x => {
+                  if (x.id !== c.id) return x;
+                  if (!mode) return { ...x, value: val };
+                  const r = { ...x, values: { ...(x.values || {}), [mode]: val } };
+                  if (mode === v.modes[0].id) r.value = val;   // el primer modo es también el valor por omisión
+                  return r;
+                }) }));
+                return (
+                  <div key={c.id} className="cvp-color">
+                    {kind === 'colors' && <label className="cvp-swatch" style={{ background: cur }}><input type="color" value={HEX.test(cur) ? cur : '#000000'} onChange={(e) => setVal(e.target.value)} /></label>}
+                    <input className="cvp-hex cvp-name" value={c.name} spellCheck={false} onKeyDown={(e) => e.stopPropagation()}
+                      onChange={(e) => setVars(v => ({ ...v, [kind]: v[kind].map(x => x.id === c.id ? { ...x, name: e.target.value } : x) }))} />
+                    {kind === 'nums' && <input className="cvp-hex cvp-val" type="number" value={cur ?? ''} onKeyDown={(e) => e.stopPropagation()} onChange={(e) => setVal(Number(e.target.value))} />}
+                    {kind === 'strs' && <input className="cvp-hex cvp-val" value={cur ?? ''} onKeyDown={(e) => e.stopPropagation()} onChange={(e) => setVal(e.target.value)} />}
+                    {kind === 'bools' && <input type="checkbox" checked={cur !== false && cur !== 'false'} onChange={(e) => setVal(e.target.checked)} />}
+                    <button type="button" className="cvp-x" title={t('cvp.remove')} onClick={() => setVars(v => ({ ...v, [kind]: v[kind].filter(x => x.id !== c.id) }))}>×</button>
+                  </div>
+                );
+              })}
+              <button type="button" className="cvp-add" onClick={() => {
+                let val = def;
+                if (kind === 'colors') { const from = selA[0] ? (selA[0].fill && selA[0].fill !== 'none' ? selA[0].fill : selA[0].color) : selN[0] ? selN[0].color : null; if (HEX.test(from || '')) val = from; }
+                setVars(v => ({ ...v, [kind]: [...(v[kind] || []), { id: newVarId(kind[0]), name: `${title} ${(v[kind] || []).length + 1}`, value: val }] }));
+              }}>+ {add}</button>
             </div>
           ))}
-          <button type="button" className="cvp-add" onClick={() => {
-            const from = selA[0] ? (selA[0].fill && selA[0].fill !== 'none' ? selA[0].fill : selA[0].color) : selN[0] ? selN[0].color : null;
-            setVars(v => ({ ...v, colors: [...v.colors, { id: newVarId('c'), name: t('cvp.var.colorN', { n: v.colors.length + 1 }), value: HEX.test(from || '') ? from : '#6366f1' }] }));
-          }}>+ {t('cvp.var.addColor')}</button>
           {listComponents(json).length > 0 && (<>
             <div className="cvp-h">{t('canvas.cmp.list')}</div>
             {listComponents(json).map(c => (
@@ -437,20 +869,23 @@ export function CanvasPropsPanel({ json, selected, selAnno, onChange, select, on
           ) : <p className="cvp-empty">{t('cvp.var.textHint')}</p>}
         </div>
       ) : tab === 'design' ? <div className="cvp-body">{design}</div> : (
-        <ul className="cvp-layers">
-          {order.map(it => {
-            const el = byId.get(it.type + it.id);
-            if (!el) return null;
-            const on = it.type === 'n' ? selected.has(it.id) : selAnno.has(it.id);
-            return (
-              <li key={it.type + it.id} className={`${on ? 'on' : ''}${el.hidden ? ' off' : ''}`}>
-                <button type="button" className="cvp-lname" onClick={(e) => select(it, e.shiftKey)}>{nameOf(it, el)}</button>
-                <button type="button" className={`cvp-ic${el.hidden ? ' act' : ''}`} title={t(el.hidden ? 'cvp.show' : 'cvp.hide')} onClick={() => toggle(it, 'hidden')}>{el.hidden ? '◌' : '◉'}</button>
-                <button type="button" className={`cvp-ic${el.locked ? ' act' : ''}`} title={t(el.locked ? 'cvp.unlock' : 'cvp.lock')} onClick={() => toggle(it, 'locked')}>{el.locked ? '🔒' : '🔓'}</button>
-              </li>
-            );
-          })}
-        </ul>
+        <div className="cvp-layerwrap">
+          {/* Páginas (como en Figma): varias hojas en el mismo canvas. */}
+          <div className="cvp-h">{t('canvas.pages')} <button type="button" className="cvp-chip" style={{ float: 'right' }} title={t('canvas.page.add')} onClick={onAddPage}>+</button></div>
+          {pages.length > 1 && (
+            <ul className="cvp-pages">
+              {pages.map(p => (
+                <li key={p.id} className={p.id === curPage ? 'on' : ''}>
+                  <button type="button" className="cvp-lname" onClick={() => onSetPage && onSetPage(p.id)}
+                    onDoubleClick={() => { const nm = window.prompt(t('canvas.page.name'), p.name); if (nm) onRenamePage && onRenamePage(p.id, nm); }}>{p.name}</button>
+                  <button type="button" className="cvp-x" title={t('cvp.remove')} onClick={() => onRemovePage && onRemovePage(p.id)}>×</button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="cvp-h">{t('cvp.layers')}</div>
+          <LayerTree json={json} byId={byId} selected={selected} selAnno={selAnno} select={select} toggle={toggle} onChange={onChange} />
+        </div>
       )}
     </aside>
   );

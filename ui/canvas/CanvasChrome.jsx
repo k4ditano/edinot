@@ -200,6 +200,7 @@ export function CanvasActions({ a, snapGrid, fullscreen }) {
     { label: t('canvas.session'), icon: <CvIcon name="timer" size={15} />, submenu: () => sessionItems },
     { type: 'sep' },
     { label: t('canvas.present.start'), icon: <CvIcon name="present" size={15} />, onSelect: a.startSlideshow },
+    ...(a.openVersions ? [{ label: t('canvas.ver.open'), icon: <CvIcon name="timer" size={15} />, onSelect: a.openVersions }] : []),
     ...exportItems.map(x => ({ ...x, label: t('cv.export') + ' ' + x.label })),
     { label: fullscreen ? t('canvas.fullExit') : t('canvas.full'), icon: <CvIcon name={fullscreen ? 'fullExit' : 'full'} size={15} />, onSelect: a.toggleFullscreen },
     { label: t('canvas.shortcuts'), icon: <CvIcon name="help" size={15} />, onSelect: a.openShortcuts },

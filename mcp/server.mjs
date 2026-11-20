@@ -11,8 +11,11 @@
 
 import { frameToHtml } from '../shared/frame-html.js';
 import { booleanOp, canBoolean } from '../shared/canvas-boolean.js';
-import { createComponent, insertInstance, syncInstances, listComponents, addVariant, switchVariant, variantsOf, libraryEntryFrom, publishToLibrary, insertFromLibrary } from '../editor/canvas/components.js';
-import { applyAutoLayout } from '../editor/canvas/autolayout.js';
+import { outlineStroke } from '../editor/canvas/outline.js';
+import { pagesOf, addPage, renamePage, removePage, moveToPage } from '../editor/canvas/pages.js';
+import { selectionUnits, alignUnits, spaceUnits, tidyUp, mainAxis, currentGap, selectSame, replaceText } from '../editor/canvas/arrange.js';
+import { createComponent, insertInstance, syncInstances, listComponents, addVariant, switchVariant, variantsOf, libraryEntryFrom, publishToLibrary, insertFromLibrary, componentProps, setInstanceProp, resetOverrides } from '../editor/canvas/components.js';
+import { applyAutoLayout, applyConstraints, frameRect } from '../editor/canvas/autolayout.js';
 import { itemCssText } from '../shared/canvas-css.js';
 import { canMask } from '../shared/canvas-mask.js';
 import { svgToCanvas, normalizePath, pathBbox } from '../shared/svg-import.js';
@@ -191,7 +194,7 @@ const TOOLS_WITH_OWN_ACTION = new Set([
   'create_from_template',
   'add_table_row', 'update_table_row', 'delete_table_row',
   'canvas_from_text', 'create_canvas', 'add_canvas_node',
-  'draw_freehand_on_canvas', 'add_canvas_shape', 'update_canvas_annotation', 'import_svg_to_canvas', 'group_canvas_items', 'set_canvas_variables', 'create_canvas_component', 'insert_canvas_component', 'boolean_canvas_shapes', 'add_component_variant', 'set_component_variant', 'export_frame_html', 'publish_component_to_library', 'insert_library_component',
+  'draw_freehand_on_canvas', 'add_canvas_shape', 'update_canvas_annotation', 'import_svg_to_canvas', 'group_canvas_items', 'set_canvas_variables', 'create_canvas_component', 'insert_canvas_component', 'boolean_canvas_shapes', 'add_component_variant', 'set_component_variant', 'export_frame_html', 'publish_component_to_library', 'insert_library_component', 'component_properties', 'outline_canvas_stroke', 'arrange_canvas_items', 'replace_canvas_text', 'canvas_pages', 'canvas_versions',
   'create_form', 'update_form', 'delete_form',
 ]);
 
@@ -4596,11 +4599,21 @@ function minCanvasZ(json) {
 const ORDER = z.enum(['front', 'back']).optional().describe('layer order: front = on top of everything, back = behind everything');
 
 // Una variable del diseño por id o por nombre (sin distinguir mayúsculas).
+function pageRefOf(json, ref) {
+  const pages = pagesOf(json);
+  const i = pages.findIndex(p => p.id === ref || String(p.name).toLowerCase() === String(ref || '').toLowerCase());
+  if (i < 0) throw new Error(`page not found: ${ref} — see canvas_pages list`);
+  return { ...pages[i], index: i };
+}
+function findVarAny(json, ref) {
+  for (const k of ['nums', 'strs', 'bools', 'colors']) if (((json.vars && json.vars[k]) || []).some(x => x.id === ref || String(x.name || '').toLowerCase() === String(ref).toLowerCase())) return k;
+  return null;
+}
 function varRef(json, kind, ref) {
   if (ref == null) return ref;
   const list = (json.vars && json.vars[kind]) || [];
   const v = list.find(x => x.id === ref) || list.find(x => String(x.name || '').toLowerCase() === String(ref).toLowerCase());
-  if (!v) throw new Error(`${kind === 'colors' ? 'colour' : 'text style'} variable not found: ${ref} — define it with set_canvas_variables`);
+  if (!v) throw new Error(`${{ colors: 'colour', texts: 'text style', nums: 'number', strs: 'string', bools: 'boolean' }[kind] || kind} variable not found: ${ref} — define it with set_canvas_variables`);
   return v.id;
 }
 function findComponent(json, ref) {
@@ -4609,10 +4622,45 @@ function findComponent(json, ref) {
   if (!c) throw new Error(`component not found: ${ref}`);
   return c;
 }
+const TEXT_EXTRA = {
+  textSize: z.enum(['auto', 'height', 'fixed']).nullable().optional().describe('label box sizing like Figma: auto (width hugs the text), height (fixed width, auto height — default), fixed (fixed box)'),
+  maxLines: z.number().min(0).max(50).nullable().optional().describe('label: truncate to N lines with "…"'),
+  truncate: z.boolean().nullable().optional().describe('label with textSize fixed: truncate what does not fit with "…"'),
+  paraSpacing: z.number().min(0).max(200).nullable().optional().describe('label: px between paragraphs (each line break)'),
+  list: z.enum(['bullet', 'number']).nullable().optional().describe('label: each line becomes a bullet / numbered list item'),
+};
+const GRAD_Z = z.object({ type: z.enum(['linear', 'radial']), x1: z.number().optional(), y1: z.number().optional(), x2: z.number().optional(), y2: z.number().optional(), cx: z.number().optional(), cy: z.number().optional(), r: z.number().optional(), stops: z.array(z.object({ offset: z.number().min(0).max(1), color: z.string(), opacity: z.number().min(0).max(1).optional() })).min(2) });
+const BLEND_Z = z.enum(['normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten', 'color-dodge', 'color-burn', 'hard-light', 'soft-light', 'difference', 'exclusion', 'hue', 'saturation', 'color', 'luminosity']);
+// Como Figma: varios rellenos y bordes por capa, varias sombras (con extensión, interiores) y modo de fusión.
+const PAINT_EXTRA = {
+  maskType: z.enum(['vector', 'alpha', 'luminance']).nullable().optional().describe('when this shape is used as a mask (others have clipTo = its id): vector = its outline (default), alpha = its transparency, luminance = light areas show, dark hide (use a gradient fill for fades)'),
+  strokeCap: z.enum(['butt', 'round', 'square']).nullable().optional(),
+  strokeJoin: z.enum(['miter', 'round', 'bevel']).nullable().optional(),
+  startCap: z.enum(['none', 'arrow', 'triangle', 'circle', 'bar', 'diamond']).nullable().optional().describe('arrowhead / end marker at the start of a line or open path'),
+  endCap: z.enum(['none', 'arrow', 'triangle', 'circle', 'bar', 'diamond']).nullable().optional().describe('arrowhead / end marker at the end of a line or open path'),
+  dashPattern: z.string().nullable().optional().describe('custom dashes like "12 4 2 4" (overrides dash)'),
+  fills: z.array(z.object({ color: z.string().optional(), gradient: GRAD_Z.optional(), opacity: z.number().min(0).max(1).optional(), blend: BLEND_Z.optional() })).nullable().optional()
+    .describe('extra fills painted ON TOP of the main fill (bottom→top), e.g. a 10% black overlay with blend multiply'),
+  strokes: z.array(z.object({ color: z.string(), width: z.number().min(0).optional(), opacity: z.number().min(0).max(1).optional(), dash: z.enum(['solid', 'dashed', 'dotted']).optional(), align: z.enum(['center', 'inside', 'outside']).optional() })).nullable().optional()
+    .describe('extra strokes on top of everything (e.g. an inner white ring + an outer dark ring)'),
+  shadows: z.array(z.object({ dx: z.number().optional(), dy: z.number().optional(), blur: z.number().min(0).optional(), spread: z.number().optional(), color: z.string().optional(), opacity: z.number().min(0).max(1).optional(), inner: z.boolean().optional() })).nullable().optional()
+    .describe('several shadows (first = top), each with spread; inner: true for inset. Replaces shadow/innerShadow, e.g. [{dy:1,blur:2,opacity:.1},{dy:12,blur:24,spread:-4,opacity:.15}]'),
+  blend: BLEND_Z.nullable().optional().describe('layer blend mode (mix-blend-mode)'),
+};
 const VARS_SCHEMA = {
   fillVar: z.string().nullable().optional().describe('link the fill (or a card colour) to a colour variable, by name or id'),
   colorVar: z.string().nullable().optional().describe('link the stroke / text colour to a colour variable, by name or id'),
   textStyle: z.string().nullable().optional().describe('labels: link to a text style variable, by name or id'),
+  bind: z.record(z.string()).nullable().optional().describe('bind properties to number/string/boolean variables (by name or id): { rx, strokeWidth, opacity, fontSize, w, h, text, visible }'),
+  interactions: z.array(z.object({
+    trigger: z.enum(['click', 'hover', 'press', 'delay', 'key']),
+    action: z.enum(['navigate', 'back', 'overlay', 'close', 'scrollTo', 'variant', 'setVar', 'url']),
+    target: z.string().optional().describe('navigate/overlay: frame id or title; variant: variant name; scrollTo: item id; url: link'),
+    anim: z.enum(['instant', 'dissolve', 'slide', 'move', 'smart']).optional(),
+    delay: z.number().optional().describe('trigger delay: ms'), key: z.string().optional().describe('trigger key: e.g. "Enter", "a"'),
+    var: z.string().optional().describe('setVar: variable name or id'), value: z.union([z.string(), z.number(), z.boolean()]).optional().describe('setVar: value, "toggle", or "+1"/"-1"'),
+    if: z.object({ var: z.string(), eq: z.union([z.string(), z.number(), z.boolean()]) }).optional().describe('condition: only when the variable equals eq'),
+  })).nullable().optional().describe('prototype interactions (like Figma): hover / press (temporary, e.g. change to a "Hover" variant), click, after delay, key; navigate, back, overlay, scroll to, change variant, set variable, open URL; optional condition'),
 };
 
 // Toda escritura de un canvas pasa por aquí: las instancias de componentes se rehacen desde su principal y los
@@ -4929,7 +4977,15 @@ server.tool(
     wrap: z.boolean().optional().describe('label: fixed-width box (w) that wraps lines'),
     plain: z.boolean().optional().describe('label: design text (no padding/shadow, weight 400 by default)'),
     rich: z.boolean().optional().describe('mixed styles inside the text with marks: **bold**, *italic*, __underline__, ~~strike~~, `code`, {#e11d48|colour}, {+24|size}'),
+    ...TEXT_EXTRA,
     ...VARS_SCHEMA,
+    sizeW: z.enum(['fixed', 'fill']).nullable().optional().describe('inside an auto layout frame: fixed width or fill the available space'),
+    sizeH: z.enum(['fixed', 'fill']).nullable().optional(),
+    minW: z.number().nullable().optional(), maxW: z.number().nullable().optional(), minH: z.number().nullable().optional(), maxH: z.number().nullable().optional(),
+    layoutAbsolute: z.boolean().nullable().optional().describe('stay out of the auto layout (absolute position inside the frame)'),
+    span: z.number().min(1).max(24).nullable().optional().describe('grid auto layout: columns this item spans'),
+    constraints: z.object({ h: z.enum(['left', 'right', 'center', 'stretch', 'scale']).optional(), v: z.enum(['top', 'bottom', 'center', 'stretch', 'scale']).optional() }).nullable().optional()
+      .describe('frame without auto layout: how this item follows the frame when the frame is resized'),
     anim: z.object({ enter: z.enum(['fade', 'up', 'down', 'left', 'right', 'scale', 'pop', 'blur']).optional(), dur: z.number().optional(), delay: z.number().optional(),
       hover: z.enum(['lift', 'grow', 'dim', 'glow', 'press']).optional(), loop: z.enum(['pulse', 'spin', 'bounce', 'float', 'blink', 'wiggle']).optional() }).nullable().optional()
       .describe('animation shown while presenting: entrance when its screen opens (with dur/delay ms), hover effect, loop'),
@@ -4951,7 +5007,7 @@ server.tool(
     h: z.number().optional(),
     color: z.string().optional(),
   },
-  async ({ name, kind, shape, fontSize, font, weight, italic, underline, strike, lineHeight, letterSpacing, transform, align, wrap, plain, fillVar, colorVar, textStyle, anim, linkAnim, linkMode, rich, noteName, text, url, sha, path: filePath, data, filename, mime, query, sticky, x, y, w, h, color }) => withSession(async (s) => {
+  async ({ name, kind, shape, fontSize, font, weight, italic, underline, strike, lineHeight, letterSpacing, transform, align, wrap, plain, textSize, maxLines, truncate, paraSpacing, list, fillVar, colorVar, textStyle, anim, linkAnim, linkMode, rich, sizeW, sizeH, minW, maxW, minH, maxH, layoutAbsolute, span, constraints, noteName, text, url, sha, path: filePath, data, filename, mime, query, sticky, x, y, w, h, color }) => withSession(async (s) => {
     // Resolve data/url into an uploaded blob (same pipeline as attach_image).
     const uploadBlobInput = async (fallbackName) => {
       const cfg = resolveCfg();
@@ -4977,6 +5033,7 @@ server.tool(
     if (anim) node.anim = anim;
     if (linkAnim) node.linkAnim = linkAnim;
     if (linkMode === 'overlay') node.linkMode = 'overlay';
+    for (const [k, v] of Object.entries({ sizeW, sizeH, minW, maxW, minH, maxH, layoutAbsolute, span, constraints })) if (v != null && v !== 'fixed' && v !== false) node[k] = v;
     if (color) node.color = color;
     if (kind === 'note') {
       if (!noteName) throw new Error('add_canvas_node kind=note needs noteName');
@@ -4993,7 +5050,7 @@ server.tool(
     } else if (kind === 'label') {
       node.text = text || '';
       node.fontSize = fontSize || 22;
-      const tx = { font, weight, italic, underline, strike, lineHeight, letterSpacing, transform, align, wrap, plain, rich };
+      const tx = { font, weight, italic, underline, strike, lineHeight, letterSpacing, transform, align, wrap, plain, rich, textSize, maxLines, truncate, paraSpacing, list };
       for (const [k, v] of Object.entries(tx)) if (v != null && v !== false) node[k] = v;
       if (!wrap) node.noWrap = true;
       if (w == null) node.w = Math.max(80, Math.round((text || '').length * (fontSize || 22) * 0.58) + 16);
@@ -5277,6 +5334,7 @@ server.tool(
     shadow: z.object({ dx: z.number().optional(), dy: z.number().optional(), blur: z.number().min(0).optional(), color: z.string().optional(), opacity: z.number().min(0).max(1).optional() })
       .describe('Drop shadow, e.g. { dy: 8, blur: 12, color: "#000", opacity: 0.18 }.').optional(),
     innerShadow: z.object({ dx: z.number().optional(), dy: z.number().optional(), blur: z.number().min(0).optional(), color: z.string().optional(), opacity: z.number().min(0).max(1).optional() }).optional().describe('inner shadow (inset)'),
+    ...PAINT_EXTRA,
     blur: z.number().min(0).max(200).optional().describe('layer blur in px'),
     bgBlur: z.number().min(0).max(200).optional().describe('background blur ("glass", frosted panels): blurs what is behind; use a semi-transparent fill like rgba(255,255,255,.35)'),
     corners: z.array(z.number().min(0)).length(4).optional().describe('rect: radius per corner [topLeft, topRight, bottomRight, bottomLeft]'),
@@ -5284,7 +5342,7 @@ server.tool(
     strokeAlign: z.enum(['center', 'inside', 'outside']).optional().describe('rect: where the border sits relative to the edge'),
     fillVar: VARS_SCHEMA.fillVar, colorVar: VARS_SCHEMA.colorVar,
   },
-  async ({ name, shape, x, y, w, h, x1, y1, x2, y2, color, strokeWidth, fill, opacity, text, rot, rx, gradient, shadow, innerShadow, blur, bgBlur, corners, sides, strokeAlign, fillVar, colorVar }) => withSession(async (s) => {
+  async ({ name, shape, x, y, w, h, x1, y1, x2, y2, color, strokeWidth, fill, opacity, text, rot, rx, gradient, shadow, innerShadow, blur, bgBlur, corners, sides, strokeAlign, fillVar, colorVar, fills, strokes, shadows, blend, strokeCap, strokeJoin, startCap, endCap, dashPattern }) => withSession(async (s) => {
     const { f, content, block } = await ensureCanvas(s, name);
     const id = newCanvasId('ann');
     const ann = { id, kind: 'shape', shape };
@@ -5306,7 +5364,8 @@ server.tool(
     ann.strokeWidth = strokeWidth != null ? strokeWidth : 2;
     if (opacity != null) ann.opacity = opacity;
     if (shadow) ann.shadow = shadow;
-    for (const [k, v] of Object.entries({ innerShadow, blur, bgBlur, corners, sides, strokeAlign })) if (v != null) ann[k] = v;
+    for (const [k, v] of Object.entries({ innerShadow, blur, bgBlur, corners, sides, strokeAlign, fills, strokes, shadows, blend, strokeCap, strokeJoin, startCap, endCap })) if (v != null) ann[k] = v;
+    if (dashPattern) ann.dash = dashPattern;
     if (fillVar) ann.fillVar = varRef(block.json, 'colors', fillVar);
     if (colorVar) ann.colorVar = varRef(block.json, 'colors', colorVar);
     ann.z = nextCanvasZ(block.json);
@@ -5378,6 +5437,7 @@ server.tool(
       .describe('Drop shadow, e.g. { dy: 8, blur: 12, color: "#000", opacity: 0.18 }.').nullable().optional(),
     size: z.number().min(0.5).max(80).optional().describe('hand pen strokes only: ink width (the stroke is rebuilt from its points)'),
     innerShadow: z.object({ dx: z.number().optional(), dy: z.number().optional(), blur: z.number().min(0).optional(), color: z.string().optional(), opacity: z.number().min(0).max(1).optional() }).nullable().optional().describe('inner shadow (inset)'),
+    ...PAINT_EXTRA,
     blur: z.number().min(0).max(200).nullable().optional().describe('layer blur in px'),
     bgBlur: z.number().min(0).max(200).nullable().optional().describe('background blur ("glass", frosted panels): blurs what is behind; use a semi-transparent fill like rgba(255,255,255,.35)'),
     corners: z.array(z.number().min(0)).length(4).nullable().optional().describe('rect: radius per corner [topLeft, topRight, bottomRight, bottomLeft]'),
@@ -5387,7 +5447,14 @@ server.tool(
     order: ORDER,
     link: z.string().nullable().optional().describe('prototype: id or title of a frame (group) to jump to when this is clicked while presenting'),
     ...VARS_SCHEMA,
-    imageFill: z.object({ url: z.string().optional(), sha: z.string().optional(), fit: z.enum(['cover', 'contain', 'fill']).optional() }).nullable().optional()
+    sizeW: z.enum(['fixed', 'fill']).nullable().optional().describe('inside an auto layout frame: fixed width or fill the available space'),
+    sizeH: z.enum(['fixed', 'fill']).nullable().optional(),
+    minW: z.number().nullable().optional(), maxW: z.number().nullable().optional(), minH: z.number().nullable().optional(), maxH: z.number().nullable().optional(),
+    layoutAbsolute: z.boolean().nullable().optional().describe('stay out of the auto layout (absolute position inside the frame)'),
+    span: z.number().min(1).max(24).nullable().optional().describe('grid auto layout: columns this item spans'),
+    constraints: z.object({ h: z.enum(['left', 'right', 'center', 'stretch', 'scale']).optional(), v: z.enum(['top', 'bottom', 'center', 'stretch', 'scale']).optional() }).nullable().optional()
+      .describe('frame without auto layout: how this item follows the frame when the frame is resized'),
+    imageFill: z.object({ url: z.string().optional(), sha: z.string().optional(), fit: z.enum(['cover', 'contain', 'fill']).optional(), scale: z.number().min(1).max(8).optional().describe('crop zoom'), ox: z.number().optional(), oy: z.number().optional().describe('move the image inside the shape (px)'), exposure: z.number().min(-1).max(1).optional(), contrast: z.number().min(-1).max(1).optional(), saturation: z.number().min(-1).max(1).optional() }).nullable().optional()
       .describe('fill a closed shape / vector path with an image (url http(s)/data:, or sha of a blob from attach_image); fit cover (default, crops), contain or fill. null removes it.'),
     anim: z.object({ enter: z.enum(['fade', 'up', 'down', 'left', 'right', 'scale', 'pop', 'blur']).optional(), dur: z.number().optional(), delay: z.number().optional(),
       hover: z.enum(['lift', 'grow', 'dim', 'glow', 'press']).optional(), loop: z.enum(['pulse', 'spin', 'bounce', 'float', 'blink', 'wiggle']).optional() }).nullable().optional()
@@ -5405,10 +5472,28 @@ server.tool(
     if (order === 'front') patch.z = nextCanvasZ(block.json);
     if (order === 'back') patch.z = minCanvasZ(block.json);
     for (const [k, kind] of [['fillVar', 'colors'], ['colorVar', 'colors'], ['textStyle', 'texts']]) if (typeof patch[k] === 'string') patch[k] = varRef(block.json, kind, patch[k]);
+    if (Array.isArray(patch.interactions)) {
+      patch.interactions = patch.interactions.map(it => {
+        const r = { ...it };
+        if (r.var) r.var = varRef(block.json, (findVarAny(block.json, r.var) || 'nums'), r.var);
+        if (r.if && r.if.var) r.if = { ...r.if, var: varRef(block.json, (findVarAny(block.json, r.if.var) || 'bools'), r.if.var) };
+        if ((r.action === 'navigate' || r.action === 'overlay') && r.target) { const g = (block.json.groups || []).find(x => x.id === r.target || String(x.title || '').toLowerCase() === String(r.target).toLowerCase()); if (!g) throw new Error(`frame not found: ${r.target}`); r.target = g.id; }
+        return r;
+      });
+    }
+    if (patch.bind && typeof patch.bind === 'object') {
+      const b = {};
+      for (const [prop, ref] of Object.entries(patch.bind)) {
+        const kind = prop === 'text' ? 'strs' : prop === 'visible' ? 'bools' : 'nums';
+        b[prop] = varRef(block.json, kind, ref);
+      }
+      patch.bind = b;
+    }
     if (patch.imageFill) {
       const src = patch.imageFill.url || (patch.imageFill.sha ? `edinot://blob/${patch.imageFill.sha}` : '');
       if (!src) throw new Error('imageFill needs url or sha');
-      patch.imageFill = { src, fit: patch.imageFill.fit || 'cover' };
+      const { url: _u, sha: _s, fit: _f, ...adj } = patch.imageFill;
+      patch.imageFill = { src, fit: patch.imageFill.fit || 'cover', ...adj };
     }
     if (typeof patch.link === 'string') {
       const g = (block.json.groups || []).find(x => x.id === patch.link) || (block.json.groups || []).find(x => String(x.title || '').toLowerCase() === patch.link.toLowerCase());
@@ -5431,6 +5516,8 @@ server.tool(
         if (v === null) delete next[k]; else next[k] = v;
       }
       if (dash) { if (dash === 'solid') delete next.dash; else next.dash = dash; }
+      if (patch.maskType === 'vector') delete next.maskType;
+      if (patch.dashPattern !== undefined) { delete next.dashPattern; if (patch.dashPattern) next.dash = patch.dashPattern; else delete next.dash; }
       // A pen stroke keeps its ink in `fill`: recolouring it means both.
       if (a.kind === 'path' && a.variant === 'pen' && typeof patch.color === 'string') next.fill = patch.color;
       if (dx || dy) { next.ox = (next.ox || 0) + (dx || 0); next.oy = (next.oy || 0) + (dy || 0); }
@@ -5462,35 +5549,57 @@ server.tool(
 
 server.tool(
   'set_canvas_variables',
-  'Define the design variables of a canvas (like Figma styles): named colours and text styles. Items link to them '
-  + 'with fillVar / colorVar / textStyle (by name) in add/update tools, and change everywhere when the variable '
-  + 'changes. Entries are merged by name (an existing name is updated); replace: true starts from scratch. '
-  + 'Text style keys: font, fontSize, weight, lineHeight, letterSpacing, italic, transform.',
+  'Define the design variables of a canvas (like Figma variables & styles). Kinds: colors, nums (spacing, radius, '
+  + 'sizes), strs (texts) and bools (show/hide), each with a default `value` and optional `values` per mode; plus '
+  + 'text styles (texts). `modes` (e.g. [{name:"Claro"},{name:"Oscuro"}]) and `mode` (active mode name) switch the whole '
+  + 'design theme. Items use them with fillVar / colorVar / textStyle, or bind: { rx|strokeWidth|opacity|fontSize|w|h|'
+  + 'text|visible: "<variable name or id>" }; frames with bind: { gap|pad: … }. Entries are merged by name; replace: true starts over.',
   {
     name: z.string(),
-    colors: z.array(z.object({ name: z.string(), value: z.string() })).optional(),
+    modes: z.array(z.object({ name: z.string() })).optional(),
+    mode: z.string().optional().describe('active mode (name or id)'),
+    colors: z.array(z.object({ name: z.string(), value: z.string(), values: z.record(z.string()).optional().describe('per mode name: { "Oscuro": "#0f172a" }') })).optional(),
+    nums: z.array(z.object({ name: z.string(), value: z.number(), values: z.record(z.number()).optional() })).optional(),
+    strs: z.array(z.object({ name: z.string(), value: z.string(), values: z.record(z.string()).optional() })).optional(),
+    bools: z.array(z.object({ name: z.string(), value: z.boolean(), values: z.record(z.boolean()).optional() })).optional(),
     texts: z.array(z.object({ name: z.string(), style: z.object({
       font: z.string().optional(), fontSize: z.number().optional(), weight: z.number().optional(), lineHeight: z.number().optional(),
       letterSpacing: z.number().optional(), italic: z.boolean().optional(), transform: z.enum(['upper', 'lower', 'title']).optional(),
     }) })).optional(),
     replace: z.boolean().optional(),
   },
-  async ({ name, colors = [], texts = [], replace }) => withSession(async (s) => {
+  async ({ name, modes, mode, colors = [], nums = [], strs = [], bools = [], texts = [], replace }) => withSession(async (s) => {
     const { f, content, block } = await ensureCanvas(s, name);
-    const cur = replace ? { colors: [], texts: [] } : { colors: [], texts: [], ...(block.json.vars || {}) };
+    const cur = replace ? {} : { ...(block.json.vars || {}) };
+    const nid = (p) => p + Date.now().toString(36).slice(-5) + Math.random().toString(36).slice(2, 5);
+    // Modos: se añaden por nombre; los valores por modo se escriben por nombre de modo.
+    let modeList = [...(cur.modes || [])];
+    for (const m of modes || []) if (!modeList.some(x => x.name.toLowerCase() === m.name.toLowerCase())) modeList.push({ id: nid('m'), name: m.name });
+    const modeId = (ref) => { const m = modeList.find(x => x.id === ref || x.name.toLowerCase() === String(ref).toLowerCase()); return m ? m.id : null; };
     const merge = (list, items, prefix, mk) => {
-      const out = [...list];
+      const out = [...(list || [])];
       for (const it of items) {
-        const i = out.findIndex(x => String(x.name).toLowerCase() === it.name.toLowerCase());
-        if (i >= 0) out[i] = { ...out[i], ...mk(it) };
-        else out.push({ id: prefix + Date.now().toString(36).slice(-5) + Math.random().toString(36).slice(2, 5), ...mk(it) });
+        const i2 = out.findIndex(x => String(x.name).toLowerCase() === it.name.toLowerCase());
+        const base = mk(it);
+        if (it.values) {
+          base.values = { ...((i2 >= 0 && out[i2].values) || {}) };
+          for (const [k, v] of Object.entries(it.values)) { const id = modeId(k); if (!id) throw new Error(`unknown mode: ${k}`); base.values[id] = v; }
+        }
+        if (i2 >= 0) out[i2] = { ...out[i2], ...base }; else out.push({ id: nid(prefix), ...base });
       }
       return out;
     };
     const vars = {
-      colors: merge(cur.colors || [], colors, 'c', (it) => ({ name: it.name, value: it.value })),
-      texts: merge(cur.texts || [], texts, 't', (it) => ({ name: it.name, style: it.style })),
+      ...cur,
+      modes: modeList,
+      colors: merge(cur.colors, colors, 'c', (it) => ({ name: it.name, value: it.value })),
+      nums: merge(cur.nums, nums, 'n', (it) => ({ name: it.name, value: it.value })),
+      strs: merge(cur.strs, strs, 's', (it) => ({ name: it.name, value: it.value })),
+      bools: merge(cur.bools, bools, 'b', (it) => ({ name: it.name, value: it.value })),
+      texts: merge(cur.texts, texts, 't', (it) => ({ name: it.name, style: it.style })),
     };
+    if (mode) { const id = modeId(mode); if (!id) throw new Error(`unknown mode: ${mode}`); vars.mode = id; }
+    else if (modeList.length && !vars.mode) vars.mode = modeList[0].id;
     await commitCanvas(s, f.id, { ...block.json, vars }, { content, block });
     return json({ ok: true, vars });
   }),
@@ -5555,6 +5664,49 @@ server.tool(
 );
 
 server.tool(
+  'component_properties',
+  'Component properties (like Figma): expose a piece of a MAIN component as a property — its text (type text) or '
+  + 'its visibility (type bool) — and then set values per instance. Actions: expose { itemId (piece of the main), '
+  + 'propName, type } | set { itemId (any piece of the instance), values: { "Etiqueta": "Cancelar", "Con icono": false } } '
+  + '| reset { itemId } (reset overrides: the instance becomes identical to its main) | list { component } '
+  + '| swap { itemId, component } (instance swap: replace the instance with another component, same place and texts). Instances '
+  + 'also keep any other change you make to them (colour, size…) when the main changes.',
+  { name: z.string(), action: z.enum(['expose', 'set', 'reset', 'list', 'swap']), itemId: z.string().optional(), propName: z.string().optional(),
+    type: z.enum(['text', 'bool']).optional(), values: z.record(z.union([z.string(), z.boolean()])).optional(), component: z.string().optional() },
+  async ({ name, action, itemId, propName, type, values, component }) => withSession(async (s) => {
+    const { f, content, block } = await ensureCanvas(s, name);
+    let lib = null; try { lib = s.getComponentLibrary ? s.getComponentLibrary() : null; } catch {}
+    const all = [...(block.json.nodes || []), ...(block.json.annotations || [])];
+    if (action === 'list') {
+      const c = findComponent(block.json, component || '');
+      return json({ component: c.name, props: componentProps(block.json, c.id, lib) });
+    }
+    const it = all.find(x => x.id === itemId);
+    if (!it) throw new Error(`item not found: ${itemId}`);
+    let next = block.json;
+    if (action === 'expose') {
+      if (!it.cmain) throw new Error('expose works on a piece of the MAIN component');
+      const tp = type || (typeof it.text === 'string' ? 'text' : 'bool');
+      const patchIt = (x) => (x.id === it.id ? { ...x, cprop: { name: propName || (tp === 'text' ? 'Texto' : 'Mostrar'), type: tp } } : x);
+      next = { ...next, nodes: (next.nodes || []).map(patchIt), annotations: (next.annotations || []).map(patchIt) };
+    } else if (action === 'set') {
+      if (!it.cinst) throw new Error('set works on a piece of an instance');
+      for (const [k, v] of Object.entries(values || {})) next = setInstanceProp(next, it.grp, k, v, lib);
+    } else if (action === 'reset') {
+      if (!it.cinst) throw new Error('reset works on a piece of an instance');
+      next = resetOverrides(next, it.grp, lib);
+    } else if (action === 'swap') {
+      // Instance swap: la instancia pasa a ser de otro componente, en el mismo sitio y con sus textos.
+      if (!it.cinst) throw new Error('swap works on a piece of an instance');
+      const c = findComponent(next, component || '');
+      next = syncInstances(switchVariant(next, it.grp, c.id), lib);
+    }
+    await commitCanvas(s, f.id, next, { content, block });
+    return json({ ok: true });
+  }),
+);
+
+server.tool(
   'add_component_variant',
   'Add a variant to a component (like a Figma component set): copies the main component next to it under a new '
   + 'variant name (e.g. "Secundario", "Desactivado"); then restyle the copy with update tools. Instances can switch '
@@ -5612,6 +5764,125 @@ server.tool(
     }
     await commitCanvas(s, f.id, next, { content, block });
     return json({ ok: true, ...r.ids });
+  }),
+);
+
+server.tool(
+  'canvas_versions',
+  'Named version history of a canvas (like Figma): save a checkpoint with a name before a big change, list them, '
+  + 'restore one (the current state is saved first as "Antes de restaurar…", so it can be undone) or delete one. '
+  + 'Versions live in the note itself and sync with it.',
+  { name: z.string(), action: z.enum(['list', 'save', 'restore', 'delete']), versionName: z.string().optional(), versionId: z.string().optional() },
+  async ({ name, action, versionName, versionId }) => withSession(async (s) => {
+    const { f, content, block } = await ensureCanvas(s, name);
+    if (!s.canvasVersions) throw new Error('version history needs the live (synced) store');
+    if (action === 'list') return json({ versions: await s.canvasVersions(f.id, 'list') });
+    if (action === 'save') {
+      let author = 'agent'; try { const idt = currentAgentIdentity(); author = (idt && (idt.alias || idt.kind)) || author; } catch {}
+      const id = await s.canvasVersions(f.id, 'save', { name: versionName, author, data: block.json });
+      return json({ ok: true, id });
+    }
+    if (!versionId) throw new Error('versionId is required (see action list)');
+    if (action === 'delete') { await s.canvasVersions(f.id, 'delete', { id: versionId }); return json({ ok: true }); }
+    const data = await s.canvasVersions(f.id, 'read', { id: versionId });
+    if (!data) throw new Error(`version not found: ${versionId}`);
+    await s.canvasVersions(f.id, 'save', { name: `Antes de restaurar · ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`, data: block.json });
+    await commitCanvas(s, f.id, data, { content, block });
+    return json({ ok: true, restored: versionId });
+  }),
+);
+
+server.tool(
+  'canvas_pages',
+  'Pages of a canvas (like Figma pages): several sheets in the same canvas note. Actions: list | add { pageName } | '
+  + 'rename { page, pageName } | remove { page } (deletes what is on it) | move { page, nodeIds, annotationIds, groupIds } '
+  + '(move items — with their groups — to a page). Items without a page belong to the first one; new items you add go '
+  + 'to the first page, then move them. read_canvas shows each item\'s `page`.',
+  { name: z.string(), action: z.enum(['list', 'add', 'rename', 'remove', 'move']), page: z.string().optional(), pageName: z.string().optional(),
+    nodeIds: z.array(z.string()).optional(), annotationIds: z.array(z.string()).optional(), groupIds: z.array(z.string()).optional() },
+  async ({ name, action, page, pageName, nodeIds = [], annotationIds = [], groupIds = [] }) => withSession(async (s) => {
+    const { f, content, block } = await ensureCanvas(s, name);
+    let j = block.json;
+    if (action === 'list') {
+      const pages = pagesOf(j);
+      const count = (id, i) => ['nodes', 'annotations', 'groups'].reduce((t, k) => t + (j[k] || []).filter(x => (x.page && pages.some(p => p.id === x.page) ? x.page : pages[0] && pages[0].id) === id).length, 0);
+      return json({ pages: pages.length ? pages.map((p, i) => ({ ...p, items: count(p.id, i) })) : [{ id: null, name: '(única)', items: (j.nodes || []).length + (j.annotations || []).length }] });
+    }
+    let out = { ok: true };
+    if (action === 'add') { const r = addPage(j, pageName || `Página ${pagesOf(j).length + 1}`, undefined, 'Página 1'); j = r.json; out.id = r.id; }
+    else {
+      const pg = pageRefOf(j, page);
+      if (action === 'rename') j = renamePage(j, pg.id, pageName || pg.name);
+      else if (action === 'remove') j = removePage(j, pg.id);
+      else if (action === 'move') j = moveToPage(j, { nodes: nodeIds, annos: annotationIds, groups: groupIds }, pg.id);
+    }
+    await commitCanvas(s, f.id, j, { content, block });
+    return json(out);
+  }),
+);
+
+server.tool(
+  'arrange_canvas_items',
+  'Arrange several canvas items at once like Figma (cards, drawings and groups; a group moves as one): align '
+  + '(left/hcenter/right/top/vcenter/bottom), distribute (equal gaps, h or v), spacing (exact gap in px along the main '
+  + 'axis or `axis`), tidy (clean grid with one equal gap). Or select_same: ids of everything sharing fill / stroke / '
+  + 'font / textColor / component / kind with the first item.',
+  { name: z.string(), action: z.enum(['align', 'distribute', 'spacing', 'tidy', 'select_same']), nodeIds: z.array(z.string()).optional(), annotationIds: z.array(z.string()).optional(),
+    how: z.enum(['left', 'hcenter', 'right', 'top', 'vcenter', 'bottom']).optional(), axis: z.enum(['h', 'v']).optional(), gap: z.number().optional(),
+    same: z.enum(['fill', 'stroke', 'font', 'textColor', 'component', 'kind']).optional() },
+  async ({ name, action, nodeIds = [], annotationIds = [], how, axis, gap, same }) => withSession(async (s) => {
+    const { f, content, block } = await ensureCanvas(s, name);
+    const j = block.json;
+    const units = selectionUnits(j, new Set(nodeIds), new Set(annotationIds));
+    if (action === 'select_same') {
+      const ref = (j.nodes || []).find(n => n.id === nodeIds[0]) || (j.annotations || []).find(a => a.id === annotationIds[0]);
+      if (!ref) throw new Error('give one item in nodeIds or annotationIds');
+      const r = selectSame(j, ref, same || 'fill');
+      return json({ nodeIds: [...r.nodes], annotationIds: [...r.annos] });
+    }
+    if (units.length < 2) throw new Error('select at least two items (or groups)');
+    let next = j;
+    if (action === 'align') next = alignUnits(j, units, how || 'left');
+    else if (action === 'distribute') next = spaceUnits(j, units, axis || mainAxis(units));
+    else if (action === 'spacing') next = spaceUnits(j, units, axis || mainAxis(units), gap ?? 16);
+    else if (action === 'tidy') next = tidyUp(j, units);
+    await commitCanvas(s, f.id, next, { content, block });
+    return json(action === 'spacing' || action === 'distribute' ? { ok: true, gap: currentGap(selectionUnits(next, new Set(nodeIds), new Set(annotationIds)), axis || mainAxis(units)) } : { ok: true });
+  }),
+);
+
+server.tool(
+  'replace_canvas_text',
+  'Find and replace text across a canvas (cards, labels, shape texts and frame titles). Case-insensitive unless caseSensitive. Returns how many were replaced.',
+  { name: z.string(), find: z.string().min(1), replace: z.string(), caseSensitive: z.boolean().optional() },
+  async ({ name, find, replace, caseSensitive }) => withSession(async (s) => {
+    const { f, content, block } = await ensureCanvas(s, name);
+    const r = replaceText(block.json, find, replace, { caseSensitive: !!caseSensitive });
+    if (r.count) await commitCanvas(s, f.id, r.json, { content, block });
+    return json({ ok: true, replaced: r.count });
+  }),
+);
+
+server.tool(
+  'outline_canvas_stroke',
+  'Outline stroke (like Figma): turn the border of drawings into filled vector shapes you can edit. Shapes with a fill '
+  + 'keep their fill (their border is removed); lines and open paths are replaced. Returns the ids of the new shapes.',
+  { name: z.string(), annotationIds: z.array(z.string()).min(1) },
+  async ({ name, annotationIds }) => withSession(async (s) => {
+    const { f, content, block } = await ensureCanvas(s, name);
+    const want = new Set(annotationIds);
+    const keep = [], added = [];
+    for (const x of block.json.annotations || []) {
+      if (!want.has(x.id)) { keep.push(x); continue; }
+      const o = outlineStroke(x);
+      if (!o) { keep.push(x); continue; }
+      const hasFill = (x.fill && x.fill !== 'none') || x.gradient || (x.imageFill && x.imageFill.src);
+      if (hasFill && x.kind === 'shape' && x.shape !== 'line' && x.shape !== 'arrow') keep.push({ ...x, color: 'none' });
+      added.push({ ...o, id: newCanvasId('ann'), ...(x.grp ? { grp: x.grp } : {}), z: (x.z != null ? x.z : nextCanvasZ(block.json)) + 0.001 });
+    }
+    if (!added.length) throw new Error('nothing to outline (the drawings need a visible border)');
+    await commitCanvas(s, f.id, { ...block.json, annotations: [...keep, ...added] }, { content, block });
+    return json({ ok: true, ids: added.map(a => a.id) });
   }),
 );
 
@@ -6095,6 +6366,13 @@ server.tool(
     order: ORDER,
     link: z.string().nullable().optional().describe('prototype: id or title of a frame (group) to jump to when this is clicked while presenting'),
     ...VARS_SCHEMA,
+    sizeW: z.enum(['fixed', 'fill']).nullable().optional().describe('inside an auto layout frame: fixed width or fill the available space'),
+    sizeH: z.enum(['fixed', 'fill']).nullable().optional(),
+    minW: z.number().nullable().optional(), maxW: z.number().nullable().optional(), minH: z.number().nullable().optional(), maxH: z.number().nullable().optional(),
+    layoutAbsolute: z.boolean().nullable().optional().describe('stay out of the auto layout (absolute position inside the frame)'),
+    span: z.number().min(1).max(24).nullable().optional().describe('grid auto layout: columns this item spans'),
+    constraints: z.object({ h: z.enum(['left', 'right', 'center', 'stretch', 'scale']).optional(), v: z.enum(['top', 'bottom', 'center', 'stretch', 'scale']).optional() }).nullable().optional()
+      .describe('frame without auto layout: how this item follows the frame when the frame is resized'),
     anim: z.object({ enter: z.enum(['fade', 'up', 'down', 'left', 'right', 'scale', 'pop', 'blur']).optional(), dur: z.number().optional(), delay: z.number().optional(),
       hover: z.enum(['lift', 'grow', 'dim', 'glow', 'press']).optional(), loop: z.enum(['pulse', 'spin', 'bounce', 'float', 'blink', 'wiggle']).optional() }).nullable().optional()
       .describe('animation shown while presenting: entrance when its screen opens (with dur/delay ms), hover effect, loop'),
@@ -6110,6 +6388,7 @@ server.tool(
     align: z.enum(['left', 'center', 'right', 'justify']).nullable().optional(),
     wrap: z.boolean().nullable().optional().describe('label: fixed-width box (w) that wraps lines'),
     plain: z.boolean().nullable().optional().describe('label: design text (no padding/shadow, weight 400 by default)'),
+    ...TEXT_EXTRA,
     rich: z.boolean().nullable().optional().describe('mixed styles inside the text: **bold**, *italic*, __underline__, ~~strike~~, `code`, {#hex|colour}, {+24|size}'),
     x: z.number().optional(),
     y: z.number().optional(),
@@ -6121,10 +6400,28 @@ server.tool(
     if (order === 'front') patch.z = nextCanvasZ(block.json);
     if (order === 'back') patch.z = minCanvasZ(block.json);
     for (const [k, kind] of [['fillVar', 'colors'], ['colorVar', 'colors'], ['textStyle', 'texts']]) if (typeof patch[k] === 'string') patch[k] = varRef(block.json, kind, patch[k]);
+    if (Array.isArray(patch.interactions)) {
+      patch.interactions = patch.interactions.map(it => {
+        const r = { ...it };
+        if (r.var) r.var = varRef(block.json, (findVarAny(block.json, r.var) || 'nums'), r.var);
+        if (r.if && r.if.var) r.if = { ...r.if, var: varRef(block.json, (findVarAny(block.json, r.if.var) || 'bools'), r.if.var) };
+        if ((r.action === 'navigate' || r.action === 'overlay') && r.target) { const g = (block.json.groups || []).find(x => x.id === r.target || String(x.title || '').toLowerCase() === String(r.target).toLowerCase()); if (!g) throw new Error(`frame not found: ${r.target}`); r.target = g.id; }
+        return r;
+      });
+    }
+    if (patch.bind && typeof patch.bind === 'object') {
+      const b = {};
+      for (const [prop, ref] of Object.entries(patch.bind)) {
+        const kind = prop === 'text' ? 'strs' : prop === 'visible' ? 'bools' : 'nums';
+        b[prop] = varRef(block.json, kind, ref);
+      }
+      patch.bind = b;
+    }
     if (patch.imageFill) {
       const src = patch.imageFill.url || (patch.imageFill.sha ? `edinot://blob/${patch.imageFill.sha}` : '');
       if (!src) throw new Error('imageFill needs url or sha');
-      patch.imageFill = { src, fit: patch.imageFill.fit || 'cover' };
+      const { url: _u, sha: _s, fit: _f, ...adj } = patch.imageFill;
+      patch.imageFill = { src, fit: patch.imageFill.fit || 'cover', ...adj };
     }
     if (typeof patch.link === 'string') {
       const g = (block.json.groups || []).find(x => x.id === patch.link) || (block.json.groups || []).find(x => String(x.title || '').toLowerCase() === patch.link.toLowerCase());
@@ -6164,9 +6461,11 @@ server.tool(
     color: z.string().optional(),
     order: z.number().optional(),
     nodeIds: z.array(z.string()).optional(),
-    layout: z.object({ dir: z.enum(['column', 'row']), gap: z.number().min(0).optional(), pad: z.number().min(0).optional(), align: z.enum(['start', 'center', 'end']).optional(), hug: z.boolean().optional() }).optional().describe('auto layout for the frame content'),
+    layout: z.object({ dir: z.enum(['column', 'row', 'grid']), gap: z.number().min(0).optional(), pad: z.number().min(0).optional(), align: z.enum(['start', 'center', 'end']).optional(), hug: z.boolean().optional(), wrap: z.boolean().optional(), gapCross: z.number().min(0).optional(), columns: z.number().min(1).max(24).optional(), gapY: z.number().min(0).optional() }).optional().describe('auto layout for the frame content'),
+    section: z.boolean().optional().describe('a section (like Figma): a big container to organise screens/frames; not a slide'),
+    page: z.string().optional().describe('page name or id (see canvas_pages); default the first page'),
   },
-  async ({ name, title, x, y, w, h, color, order, nodeIds, layout }) => withSession(async (s) => {
+  async ({ name, title, x, y, w, h, color, order, nodeIds, layout, section, page }) => withSession(async (s) => {
     const { f, content, block } = await ensureCanvas(s, name);
     const palette = ['rgba(125,169,90,0.10)', 'rgba(234,88,12,0.10)', 'rgba(59,130,246,0.10)', 'rgba(168,85,247,0.10)', 'rgba(220,38,38,0.08)', 'rgba(107,114,128,0.10)'];
     const group = {
@@ -6176,6 +6475,8 @@ server.tool(
     };
     if (order != null) group.order = order;
     if (layout) group.layout = layout;
+    if (section) group.section = true;
+    if (page) { const pg = pageRefOf(block.json, page); if (pg.index > 0) group.page = pg.id; }
     if (nodeIds && nodeIds.length) {
       const members = block.json.nodes.filter(n => nodeIds.includes(n.id));
       if (!members.length) throw new Error('none of the given nodeIds exist in this canvas');
@@ -6200,7 +6501,9 @@ server.tool(
 
 server.tool(
   'update_canvas_group',
-  'Patch a frame/group: title, color, order (slideshow position), layout (auto layout), x/y/w/h. '
+  'Patch a frame/group: title, color, order (slideshow position), layout (auto layout: column, row with optional wrap, or grid '
+  + 'with columns — children can be sizeW/sizeH "fill", min/max, span, layoutAbsolute; frames can nest), grids (layout grids), '
+  + 'scroll, x/y/w/h. Resizing a frame without layout moves children by their `constraints`. '
   + 'Pass null on color/order to clear.',
   {
     name: z.string(),
@@ -6209,8 +6512,11 @@ server.tool(
     color: z.string().nullable().optional(),
     order: z.number().nullable().optional(),
     scroll: z.boolean().nullable().optional().describe('scrollable while presenting: content placed below the frame is scrolled with the wheel'),
-    grid: z.object({ columns: z.number().min(1).max(24), gutter: z.number().min(0).optional(), margin: z.number().min(0).optional() }).nullable().optional().describe('column layout grid shown inside the frame while editing (like a Figma layout grid)'),
-    layout: z.object({ dir: z.enum(['column', 'row']), gap: z.number().min(0).optional(), pad: z.number().min(0).optional(), align: z.enum(['start', 'center', 'end']).optional(), hug: z.boolean().optional() }).nullable().optional().describe('auto layout: the frame places its content in a column or row with gap/padding (like Figma auto layout / CSS flex); items are ordered by their current position; hug = frame fits its content. null turns it off.'),
+    bind: z.record(z.string()).nullable().optional().describe('bind auto layout numbers to number variables: { gap, pad, gapCross, gapY }'),
+    grid: z.object({ columns: z.number().min(1).max(24), gutter: z.number().min(0).optional(), margin: z.number().min(0).optional() }).nullable().optional().describe('legacy: one column layout grid'),
+    grids: z.array(z.object({ type: z.enum(['columns', 'rows', 'grid']), count: z.number().min(1).max(48).optional(), gutter: z.number().min(0).optional(), margin: z.number().min(0).optional(), size: z.number().min(2).optional() })).nullable().optional()
+      .describe('layout grids shown inside the frame while editing and used for snapping (like Figma): columns / rows with count, gutter, margin; grid = square grid of `size` px'),
+    layout: z.object({ dir: z.enum(['column', 'row', 'grid']), gap: z.number().min(0).optional(), pad: z.number().min(0).optional(), align: z.enum(['start', 'center', 'end']).optional(), hug: z.boolean().optional(), wrap: z.boolean().optional(), gapCross: z.number().min(0).optional(), columns: z.number().min(1).max(24).optional(), gapY: z.number().min(0).optional() }).nullable().optional().describe('auto layout: the frame places its content in a column or row with gap/padding (like Figma auto layout / CSS flex); items are ordered by their current position; hug = frame fits its content. null turns it off.'),
     x: z.number().optional(),
     y: z.number().optional(),
     w: z.number().optional(),
@@ -6218,6 +6524,7 @@ server.tool(
   },
   async ({ name, groupId, ...patch }) => withSession(async (s) => {
     const { f, content, block } = await ensureCanvas(s, name);
+    if (patch.bind && typeof patch.bind === 'object') { const b = {}; for (const [k, ref] of Object.entries(patch.bind)) b[k] = varRef(block.json, 'nums', ref); patch.bind = b; }
     let found = null;
     const groups = (block.json.groups || []).map(g => {
       if (g.id !== groupId) return g;
@@ -6230,7 +6537,12 @@ server.tool(
       return next;
     });
     if (!found) throw new Error(`group not found: ${groupId}`);
-    await commitCanvas(s, f.id, applyAutoLayout({ ...block.json, groups }), { content, block });
+    let next = { ...block.json, groups };
+    // Marco sin auto layout que se mueve o cambia de tamaño: su contenido le sigue (restricciones; por omisión,
+    // pegado arriba a la izquierda, o sea, se mueve con él).
+    const old = (block.json.groups || []).find(g => g.id === groupId);
+    if (old && !found.layout && ['x', 'y', 'w', 'h'].some(k => patch[k] != null)) next = applyConstraints(next, groupId, frameRect(old), frameRect(found));
+    await commitCanvas(s, f.id, next, { content, block });
     return json({ ok: true, group: found });
   }),
 );

@@ -194,3 +194,45 @@ export function serializeCanvasDeterministic(ydoc) {
   if (snap.vars) norm.vars = snap.vars;
   return JSON.stringify(norm, null, 2);
 }
+
+
+// ── Versiones con nombre (historial, como Figma) ────────────────────────
+// Viven en el propio documento de la nota (meta 'versions': id → JSON con { name, ts, author, data }), así se
+// sincronizan con ella y funcionan sin servidor. `data` es el canvas entero (lo que pinta y lo que se edita).
+const MAX_VERSIONS = 50;
+function versionsMap(ydoc) {
+  const t = canvasTypes(ydoc);
+  let m = t.meta.get('versions');
+  if (!(m instanceof Y.Map)) { m = new Y.Map(); t.meta.set('versions', m); }
+  return m;
+}
+export function listCanvasVersions(ydoc) {
+  const t = canvasTypes(ydoc);
+  const m = t.meta.get('versions');
+  if (!(m instanceof Y.Map)) return [];
+  const out = [];
+  m.forEach((v, id) => { try { const o = JSON.parse(v); out.push({ id, name: o.name, ts: o.ts, author: o.author || null, items: o.items || 0 }); } catch {} });
+  return out.sort((a, b) => b.ts - a.ts);
+}
+export function readCanvasVersion(ydoc, id) {
+  const m = canvasTypes(ydoc).meta.get('versions');
+  if (!(m instanceof Y.Map) || !m.has(id)) return null;
+  try { return JSON.parse(m.get(id)).data || null; } catch { return null; }
+}
+export function saveCanvasVersion(ydoc, { name, author = null, ts = Date.now(), data = null } = {}) {
+  const snap = data || readCanvasSnapshot(ydoc);
+  const id = 'v' + ts.toString(36) + Math.random().toString(36).slice(2, 6);
+  const items = (snap.nodes || []).length + (snap.annotations || []).length + (snap.groups || []).length;
+  ydoc.transact(() => {
+    const m = versionsMap(ydoc);
+    m.set(id, JSON.stringify({ name: String(name || '').slice(0, 120) || new Date(ts).toISOString().slice(0, 16).replace('T', ' '), ts, author, items, data: snap }));
+    // Las más antiguas se van cuando hay demasiadas.
+    const all = []; m.forEach((v, k) => { try { all.push([k, JSON.parse(v).ts || 0]); } catch { all.push([k, 0]); } });
+    all.sort((a, b) => b[1] - a[1]).slice(MAX_VERSIONS).forEach(([k]) => m.delete(k));
+  });
+  return id;
+}
+export function deleteCanvasVersion(ydoc, id) {
+  const m = canvasTypes(ydoc).meta.get('versions');
+  if (m instanceof Y.Map) m.delete(id);
+}

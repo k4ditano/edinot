@@ -11,6 +11,7 @@ import {
   applyCanvasSnapshot as canvasApplySnapshot,
   isCanvasMigrated as canvasIsMigrated,
   serializeCanvasDeterministic as canvasSerialize,
+  listCanvasVersions, readCanvasVersion, saveCanvasVersion, deleteCanvasVersion,
 } from '../shared/canvas-model.js';
 import {
   attachLegacyBridge as commentsAttachBridge,
@@ -1587,6 +1588,18 @@ export const ops = {
           if (e && e.accessible) return canvasReadSnapshot(e.ydoc);
         } catch {}
         return { nodes: [], edges: [], groups: [], annotations: [] };
+      },
+      // Versiones con nombre del canvas (en el documento de la nota): list | save | read | delete.
+      async canvasVersions(id, op, arg = {}) {
+        const loc = locateFile(id);
+        if (!loc) throw new Error(`file not found: ${id}`);
+        const e = await ensureNoteProvider(id, loc.vault.vaultId);
+        if (!e || !e.accessible) throw new Error('the canvas document is not available');
+        if (op === 'list') return listCanvasVersions(e.ydoc);
+        if (op === 'save') return saveCanvasVersion(e.ydoc, arg);
+        if (op === 'read') return readCanvasVersion(e.ydoc, arg.id);
+        if (op === 'delete') return deleteCanvasVersion(e.ydoc, arg.id);
+        throw new Error(`unknown op ${op}`);
       },
       // Commit a desired canvas JSON. Structured path: apply granular ops to
       // the Yjs types, then regenerate the deterministic fence mirror into the

@@ -20,3 +20,25 @@ test('a frame becomes an HTML page with positioned, styled pieces in stack order
   assert.match(html, /<svg style="position:absolute;z-index:3;/);
   assert.doesNotMatch(html, /2000/);
 });
+
+test('auto layout frames export as real flex / grid (fill, span, nested)', () => {
+  const json = {
+    groups: [
+      { id: 'list', title: 'Lista', x: 0, y: 0, w: 360, h: 600, layout: { dir: 'column', gap: 12, pad: 16 } },
+      { id: 'cards', title: 'Tarjetas', x: 16, y: 300, w: 328, h: 200, layout: { dir: 'grid', columns: 2, gap: 8, pad: 0 } },
+    ],
+    nodes: [
+      { id: 't', kind: 'label', text: 'Título', plain: true, fontSize: 24, x: 16, y: 42, w: 200, h: 30 },
+      { id: 'b', kind: 'shape', shape: 'rect', text: 'Botón', x: 16, y: 90, w: 100, h: 44, sizeW: 'fill' },
+      { id: 'c1', kind: 'shape', shape: 'rect', text: 'A', x: 16, y: 330, w: 100, h: 60, sizeW: 'fill' },
+      { id: 'c2', kind: 'shape', shape: 'rect', text: 'B', x: 200, y: 330, w: 100, h: 60, span: 2, sizeW: 'fill' },
+    ],
+    annotations: [],
+  };
+  const html = frameToHtml(json, json.groups[0]);
+  assert.match(html, /display:flex;flex-direction:column;gap:12px/);
+  assert.match(html, /padding:16px/);
+  assert.match(html, /display:grid;grid-template-columns:repeat\(2, minmax\(0, 1fr\)\)/);
+  assert.match(html, /grid-column:span 2/);
+  assert.match(html, /align-self:stretch;width:auto/);
+});

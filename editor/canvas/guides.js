@@ -78,3 +78,32 @@ export function annoBoxes(annotations, skip) {
   }
   return out;
 }
+
+/** Medidas entre dos cajas (modo desarrollador, Alt sobre otro elemento): líneas con su distancia.
+ *  Si una contiene a la otra, la distancia a cada borde; si no, el hueco horizontal y el vertical. */
+export function measureBetween(a, b) {
+  const out = [];
+  const R = (n) => Math.round(n);
+  const ar = a.x + a.w, ab = a.y + a.h, br = b.x + b.w, bb = b.y + b.h;
+  const line = (x1, y1, x2, y2) => { const d = R(Math.abs(x2 - x1) + Math.abs(y2 - y1)); if (d > 0) out.push({ x1: Math.min(x1, x2), y1: Math.min(y1, y2), x2: Math.max(x1, x2), y2: Math.max(y1, y2), label: d }); };
+  const inside = (p, q) => p.x >= q.x && p.y >= q.y && p.x + p.w <= q.x + q.w && p.y + p.h <= q.y + q.h;
+  if (inside(a, b) || inside(b, a)) {
+    const [i, o] = inside(a, b) ? [a, b] : [b, a];
+    const cy = i.y + i.h / 2, cx = i.x + i.w / 2;
+    line(o.x, cy, i.x, cy); line(i.x + i.w, cy, o.x + o.w, cy);
+    line(cx, o.y, cx, i.y); line(cx, i.y + i.h, cx, o.y + o.h);
+    return out;
+  }
+  // Hueco horizontal, a la altura del tramo vertical que comparten (o del centro de la seleccionada).
+  const oy1 = Math.max(a.y, b.y), oy2 = Math.min(ab, bb);
+  const yMid = oy2 > oy1 ? (oy1 + oy2) / 2 : a.y + a.h / 2;
+  if (ar <= b.x) line(ar, yMid, b.x, yMid);
+  else if (br <= a.x) line(br, yMid, a.x, yMid);
+  const ox1 = Math.max(a.x, b.x), ox2 = Math.min(ar, br);
+  const xMid = ox2 > ox1 ? (ox1 + ox2) / 2 : a.x + a.w / 2;
+  if (ab <= b.y) line(xMid, ab, xMid, b.y);
+  else if (bb <= a.y) line(xMid, bb, xMid, a.y);
+  // Se solapan sin contenerse: diferencia entre bordes izquierdos y superiores.
+  if (!out.length) { line(Math.min(a.x, b.x), yMid, Math.max(a.x, b.x), yMid); line(xMid, Math.min(a.y, b.y), xMid, Math.max(a.y, b.y)); }
+  return out;
+}

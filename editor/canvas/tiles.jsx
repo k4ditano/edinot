@@ -1,7 +1,7 @@
 // Fichas del canvas y sus piezas (adjuntos, modal de nota, consultas, grupos, selector de notas, vista previa).
 
 import { shapeD, shapeTextBox } from './shapes.js';
-import { labelTextStyle } from '../../shared/text-style.js';
+import { labelTextStyle, labelBlocks } from '../../shared/text-style.js';
 import { parseRich } from '../../shared/rich-text.js';
 
 // Texto con estilos mezclados (**negrita**, *cursiva*, __subrayado__, ~~tachado~~, `código`, {#color|texto}, {+tamaño|texto}).
@@ -441,6 +441,18 @@ export function CanvasTileImpl({ node, note, syncConfig, onMouseDown, onOpen, on
     ...(transientStyle.color ? { '--node-color': transientStyle.color } : {}),
     willChange: 'transform',
   } : null;
+  // Texto con ancho / alto automático: la caja guardada sigue a lo que mide el texto (para alinear y el auto layout).
+  const tileRef = useRef(null);
+  useLayoutEffect(() => {
+    if (!isLabel || !onPatchNode || editingText !== null || !node.textSize || node.textSize === 'fixed') return;
+    const el = tileRef.current;
+    if (!el) return;
+    const mw = Math.ceil(el.offsetWidth), mh = Math.ceil(el.offsetHeight);
+    const patch = {};
+    if (node.textSize === 'auto' && Math.abs(mw - (node.w || 0)) > 1) patch.w = mw;
+    if (Math.abs(mh - (node.h || 0)) > 1) patch.h = mh;
+    if (Object.keys(patch).length) onPatchNode(node.id, patch);
+  });
   const commitEdit = () => { if (editingText !== null) { onEditText && onEditText(node.id, editingText); setEditingText(null); } };
   const textEditor = (
     <textarea className="canvas-node-textedit" autoFocus value={editingText || ''}
@@ -457,7 +469,8 @@ export function CanvasTileImpl({ node, note, syncConfig, onMouseDown, onOpen, on
   );
   return (
     <div className={`canvas-node canvas-node-${node.kind || 'text'}${isSticky ? ' canvas-node-sticky' : ''}${isSelected ? ' selected' : ''}${animStyle ? ' canvas-node-animating' : ''}`}
-      style={{ left: node.x, top: node.y, width: w, ...(isLabel ? { minHeight: h } : { height: h }), '--node-color': node.color || '', ...(animStyle || {}) }}
+      ref={tileRef}
+      style={{ left: node.x, top: node.y, width: isLabel && node.textSize === 'auto' ? 'max-content' : w, ...(isLabel ? (node.textSize === 'fixed' ? { height: h, overflow: 'hidden' } : { minHeight: node.textSize === 'auto' ? 0 : h }) : { height: h }), '--node-color': node.color || '', ...(animStyle || {}) }}
       data-node-id={node.id}
       data-hover={(node.anim && node.anim.hover) || undefined} data-loop={(node.anim && node.anim.loop) || undefined}
       onDoubleClick={(e) => {
@@ -624,7 +637,14 @@ export function CanvasTileImpl({ node, note, syncConfig, onMouseDown, onOpen, on
         {isAttachment && <CanvasAttachmentPreview node={node} syncConfig={syncConfig} />}
         {isLabel && (editingText !== null
           ? <div className="canvas-label-grow" data-value={(editingText || '') + ' '} style={labelTextStyle(node)}>{textEditor}</div>
-          : <div className="canvas-node-labeltext" style={labelTextStyle(node)}>{node.rich && node.text ? <RichText text={node.text} /> : (node.text || t('canvas.labelDefault'))}</div>)}
+          : <div className="canvas-node-labeltext" style={labelTextStyle(node)}>{(() => {
+              const blk = node.text ? labelBlocks(node) : null;
+              const line = (l) => (node.rich ? <RichText text={l} /> : l);
+              if (!blk) return node.rich && node.text ? <RichText text={node.text} /> : (node.text || t('canvas.labelDefault'));
+              const sp = (i) => (blk.spacing && i < blk.lines.length - 1 ? { marginBottom: blk.spacing } : undefined);
+              if (blk.list) { const L = blk.list === 'number' ? 'ol' : 'ul'; return <L style={{ margin: 0, paddingLeft: '1.3em' }}>{blk.lines.map((l, i) => <li key={i} style={sp(i)}>{line(l)}</li>)}</L>; }
+              return blk.lines.map((l, i) => <p key={i} style={{ margin: 0, ...(sp(i) || {}) }}>{l ? line(l) : <br />}</p>);
+            })()}</div>)}
         {isDraw && (
           <svg className="canvas-node-drawsvg" viewBox={`0 0 ${node.w || 100} ${node.h || 100}`} preserveAspectRatio="none">
             <path d={node.path || ''} fill="none" stroke={node.color || '#ea580c'}
@@ -668,7 +688,7 @@ export const CanvasTile = memo(CanvasTileImpl);
 export function CanvasGroup({ group, onMouseDown, onRename, onDelete, onDuplicate, onLayoutMenu }) {
   useI18n();
   return (
-    <div className="canvas-group"
+    <div className={`canvas-group${group.section ? ' canvas-section' : ''}`}
       style={{ left: group.x, top: group.y, width: group.w || CANVAS_GROUP_DEFAULT_W, height: group.h || CANVAS_GROUP_DEFAULT_H, '--group-color': group.color || '' }}
       data-group-id={group.id}>
       <div className="canvas-group-head"

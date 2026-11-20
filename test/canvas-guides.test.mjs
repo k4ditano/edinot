@@ -23,3 +23,11 @@ test('annoBoxes uses offset and skips hidden / moving ones', () => {
   const b = annoBoxes([{ id: 'a', bbox: { x: 0, y: 0, w: 5, h: 5 }, ox: 10 }, { id: 'b', bbox: { x: 0, y: 0, w: 1, h: 1 }, hidden: true }, { id: 'c', bbox: { x: 0, y: 0, w: 1, h: 1 } }], new Set(['c']));
   assert.deepEqual(b, [{ x: 10, y: 0, w: 5, h: 5 }]);
 });
+
+test('measureBetween: gap to a neighbour and distances inside a frame', async () => {
+  const { measureBetween } = await import('../editor/canvas/guides.js');
+  const m = measureBetween({ x: 0, y: 0, w: 100, h: 50 }, { x: 140, y: 10, w: 50, h: 50 });
+  assert.deepEqual(m.map(g => g.label), [40]);
+  const n = measureBetween({ x: 20, y: 30, w: 60, h: 40 }, { x: 0, y: 0, w: 100, h: 100 });
+  assert.deepEqual(n.map(g => g.label), [20, 20, 30, 30]);
+});

@@ -11,22 +11,26 @@
 import { smartPairs, frameItems, playEnter } from './motion.js';
 import { booleanOp, canBoolean } from '../../shared/canvas-boolean.js';
 import { normalizePath, transformPath, pathBbox, arcsToCubics } from '../../shared/svg-import.js';
-import { createComponent, insertInstance, syncInstances, detachInstances, addVariant, switchVariant, variantsOf, libraryEntryFrom, publishToLibrary, insertFromLibrary } from './components.js';
-import { resolveVars } from '../../shared/canvas-vars.js';
-import { applyAutoLayout } from './autolayout.js';
+import { interactionsOf, condOk, withVar, frameInteractions } from './interactions.js';
+import { listComponents, createComponent, insertInstance, syncInstances, detachInstances, addVariant, switchVariant, variantsOf, libraryEntryFrom, publishToLibrary, insertFromLibrary, resetOverrides, setInstanceProp } from './components.js';
+import { resolveVars, findVar, varValue } from '../../shared/canvas-vars.js';
+import { applyAutoLayout, applyConstraints, frameTree, frameRect } from './autolayout.js';
 import { itemCssText } from '../../shared/canvas-css.js';
-import { snapMove, annoBoxes } from './guides.js';
+import { snapMove, annoBoxes, measureBetween } from './guides.js';
+import { markerSvg, outlineStroke } from './outline.js';
+import { pagesOf, filterPage, tagNew, addPage, renamePage, removePage, moveToPage } from './pages.js';
+import { selectionUnits, alignUnits, spaceUnits, tidyUp, mainAxis, currentGap, selectSame, SAME_KINDS, replaceText } from './arrange.js';
 import { clipFor, applyMask, releaseMask, maskGeometry } from '../../shared/canvas-mask.js';
 import { labelLines, labelSvgAttrs } from '../../shared/text-style.js';
 import { parseRich } from '../../shared/rich-text.js';
 import { frameToHtml } from '../../shared/frame-html.js';
-import { annoFilterSvg, gradientSvg, hasFilter, cornersRectD, sidesD, imageFillSvg, localBox } from '../../shared/canvas-effects.js';
+import { annoFilterSvg, gradientSvg, hasFilter, cornersRectD, sidesD, imageFillSvg, localBox, paintStack, imageGeom, imageAdjustSvg, hasImageAdjust } from '../../shared/canvas-effects.js';
 import { CanvasPropsPanel } from './PropsPanel.jsx';
 import { Menu } from '../../ui/shell/Menu.jsx';
 import { useI18n, t, getLang } from '../../i18n.js';
 import { useRef, useState, useMemo, useEffect, useLayoutEffect, useDeferredValue, useCallback, memo } from 'react';
 import { mountDbBlock, sweepDbBlocks } from '../db/mount.jsx';
-import { yMeta, getVaultEvents, isPendingReminder, ydoc, getCanvasUndoManager, getNoteDoc } from '../../store.js';
+import { yMeta, getVaultEvents, isPendingReminder, ydoc, getCanvasUndoManager, getNoteDoc, listCanvasVersions, readCanvasVersion, saveCanvasVersion, deleteCanvasVersion, observeCanvasVersions } from '../../store.js';
 import { readNoteComments, putComment, patchComments } from '../../shared/comments-model.js';
 import { buildCanvasTemplate, canvasTemplateInfo } from '../../shared/canvas-templates.js';
 import { CanvasDock, CanvasActions, CanvasZoom, CvIcon } from '../../ui/canvas/CanvasChrome.jsx';
@@ -75,18 +79,45 @@ import { CANVAS_DRAW_TOOLS, CANVAS_SHAPE_TOOLS, CANVAS_CLOSED_SHAPE_SET, canvasF
 const CANVAS_EDGE_DEFAULT = '#9B9A97'; // gris neutro (antes verde del tema antiguo)
 let edgeCullRect = null; // rect del mundo visible durante el pintado de aristas (lo fija el render)
 
-function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, onChange, onOpenNote, onUploadAttachment, onUpdateNoteContent, onCreateReminder, askPrompt, askConfirm, renderPage, pageTitle, intro, transitionRef, pageSource }) {
+// Rejillas de guía de un marco: `grids` (lista) o la antigua `grid` (columnas).
+function frameGrids(g) {
+  if (Array.isArray(g.grids)) return g.grids;
+  if (g.grid && g.grid.columns > 0) return [{ type: 'columns', count: g.grid.columns, gutter: g.grid.gutter ?? 16, margin: g.grid.margin ?? 16 }];
+  return [];
+}
+// Bandas (columnas o filas) de una rejilla de guía en una longitud dada: [{ start, size }].
+function gridBands(q, len) {
+  const n = Math.max(1, q.count || 1), gut = q.gutter ?? 16, mar = q.margin ?? 16;
+  const size = (len - mar * 2 - gut * (n - 1)) / n;
+  return Array.from({ length: n }, (_, i) => ({ start: mar + i * (size + gut), size: Math.max(1, size) }));
+}
+
+function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, onChange: onChangeRaw, onOpenNote, onUploadAttachment, onUpdateNoteContent, onCreateReminder, askPrompt, askConfirm, renderPage, pageTitle, intro, transitionRef, pageSource }) {
   useI18n();
   canvasPerf.view++;
   // Gestos (arrastrar, redimensionar, rotar): cada movimiento pinta un
   // borrador local y sólo el soltar escribe en el doc. Escribir en Yjs en cada
   // mousemove sincronizaba, guardaba en IndexedDB y re-renderizaba el editor
   // entero 60+ veces por segundo, y dejaba un tombstone por movimiento.
+  // Páginas: se pinta solo la actual (guardada por nota en este equipo) y lo nuevo se queda en ella.
+  const pageKey = activeNoteId ? `edinotCanvasPage:${activeNoteId}` : null;
+  const [pageSel, setPageSel] = useState(() => { try { return pageKey ? localStorage.getItem(pageKey) : null; } catch { return null; } });
+  useEffect(() => { try { setPageSel(pageKey ? localStorage.getItem(pageKey) : null); } catch { setPageSel(null); } }, [pageKey]);
+  const pageList = pagesOf(jsonProp);
+  const curPage = pageList.length > 1 ? (pageList.some(p => p.id === pageSel) ? pageSel : pageList[0].id) : null;
+  const curPageRef = useRef(curPage);
+  curPageRef.current = curPage;
+  const setPage = (id) => { setPageSel(id); try { if (pageKey) localStorage.setItem(pageKey, id); } catch {} };
+  const onChange = useCallback((fn) => onChangeRaw(j => tagNew(j, typeof fn === 'function' ? fn(j) : fn, curPageRef.current)), [onChangeRaw]);
   const [draft, setDraft] = useState(null);   // updater (json → json) aún sin guardar
   const draftRef = useRef(null);
   const jsonRef = useRef(jsonProp);
   const draftRafRef = useRef(0);
-  const json = useMemo(() => (draft ? draft(jsonProp) : jsonProp), [draft, jsonProp]);
+  // Estado del prototipo mientras se presenta (variantes y variables cambiadas por interacciones): no se guarda.
+  const [proto, setProto] = useState(null);
+  const json = useMemo(() => { const j0 = draft ? draft(jsonProp) : jsonProp; const j = proto ? proto(j0) : j0; return curPage ? filterPage(j, curPage) : j; }, [draft, jsonProp, proto, curPage]);
+  const protoJsonRef = useRef(json);
+  protoJsonRef.current = json;
   const previewChange = (updater) => {
     draftRef.current = updater;
     if (draftRafRef.current) return;
@@ -280,6 +311,33 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
   const [marquee, setMarquee] = useState(null);   // { x, y, w, h } world rect while shift-dragging empty canvas
   const [exporting, setExporting] = useState(false);   // hide chrome (toolbar/help) during PNG capture
   const [guides, setGuides] = useState(null);   // { v: [worldX...], h: [worldY...] } alignment guides while dragging
+  const [cropEdit, setCropEdit] = useState(null);
+  const [respPrev, setRespPrev] = useState(null);
+  // Historial de versiones con nombre (en el documento de la nota).
+  const [verOpen, setVerOpen] = useState(false);
+  const [verList, setVerList] = useState([]);
+  const [verView, setVerView] = useState(null);   // { id, name } versión que se está viendo
+  useEffect(() => {
+    if (!verOpen || !activeNoteId) return undefined;
+    const load = () => setVerList(listCanvasVersions(activeNoteId));
+    load();
+    return observeCanvasVersions(activeNoteId, load);
+  }, [verOpen, activeNoteId]);
+  const viewVersion = (v) => {
+    const data = readCanvasVersion(activeNoteId, v.id);
+    if (!data) return;
+    const u = () => data;
+    draftRef.current = u; setDraft(() => u); setVerView({ id: v.id, name: v.name });
+  };
+  const leaveVersion = () => { draftRef.current = null; setDraft(null); setVerView(null); };
+  const restoreVersion = (id) => {
+    const data = readCanvasVersion(activeNoteId, id);
+    if (!data) return;
+    saveCanvasVersion(activeNoteId, { name: t('canvas.ver.before', { d: new Date().toLocaleString() }), data: jsonProp });
+    draftRef.current = null; setDraft(null); setVerView(null);
+    onChangeRaw(() => data);
+  };   // vista previa adaptable: { id, rect, w }   // dibujo cuya imagen de relleno se está recolocando
+  const [measure, setMeasure] = useState(null); // modo desarrollador: medidas (Alt sobre otro elemento) [{x1,y1,x2,y2,label}]
   const [panSize, setPanSize] = useState({ w: 0, h: 0 });   // pan-area pixel size, for the minimap viewport rect
   useEffect(() => {
     const el = containerRef.current;
@@ -636,7 +694,8 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
     const op = a.opacity != null ? a.opacity : 1;
     const fill = (a.imageFill && a.imageFill.src) ? 'none' : a.gradient ? `url(#cvg-${a.id})` : (a.fill && a.fill !== 'none' ? a.fill : 'none');
     const dash = canvasDashArray(a.dash) || undefined;
-    const common = { stroke, strokeWidth: sw, fill, opacity: op, strokeLinejoin: 'round', strokeDasharray: dash };
+    const common = { stroke, strokeWidth: sw, fill, opacity: op, strokeLinejoin: a.strokeJoin || 'round', strokeDasharray: dash };
+    const mk = (a.startCap || a.endCap) ? { markerStart: a.startCap && a.startCap !== 'none' ? `url(#${a.id}-ms)` : undefined, markerEnd: a.endCap && a.endCap !== 'none' ? `url(#${a.id}-me)` : undefined } : {};
     if (a.sketch) {
       // Estilo a mano alzada (rough.js). La flecha conserva su punta normal.
       const ps = sketchShapePaths(a);
@@ -675,7 +734,7 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
       case 'line':
         return <>
           {interactive && <line x1={a.x1} y1={a.y1} x2={a.x2} y2={a.y2} stroke="transparent" strokeWidth={Math.max(14, sw + 10)} style={{ pointerEvents: 'stroke' }} />}
-          <line x1={a.x1} y1={a.y1} x2={a.x2} y2={a.y2} stroke={stroke} strokeWidth={sw} opacity={op} strokeLinecap="round" strokeDasharray={dash} />
+          <line x1={a.x1} y1={a.y1} x2={a.x2} y2={a.y2} stroke={stroke} strokeWidth={sw} opacity={op} strokeLinecap={a.strokeCap || 'round'} strokeDasharray={dash} {...mk} />
         </>;
       case 'arrow': {
         // Shorten the shaft so it ends at the base of the head (no poke-through).
@@ -712,7 +771,19 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
   // Las guías viven con el canvas (json.vars.guides = { v: [x…], h: [y…] }) y atraen al mover, como cualquier borde.
   const guideBoxes = (j) => {
     const g = (j.vars && j.vars.guides) || {};
-    return [...(g.v || []).map(x => ({ x, y: -1e6, w: 0, h: 2e6 })), ...(g.h || []).map(y => ({ x: -1e6, y, w: 2e6, h: 0 }))];
+    const out = [...(g.v || []).map(x => ({ x, y: -1e6, w: 0, h: 2e6 })), ...(g.h || []).map(y => ({ x: -1e6, y, w: 2e6, h: 0 }))];
+    // Los bordes de las columnas y filas de las rejillas de guía también atraen (solo dentro de su marco).
+    for (const fr of j.groups || []) {
+      const gx = fr.x || 0, gy = (fr.y || 0) + 26, gw = fr.w || CANVAS_GROUP_DEFAULT_W, gh = (fr.h || CANVAS_GROUP_DEFAULT_H) - 26;
+      for (const q of frameGrids(fr)) {
+        if (q.type === 'grid') continue;
+        for (const b of gridBands(q, q.type === 'rows' ? gh : gw)) {
+          if (q.type === 'rows') out.push({ x: gx, y: gy + b.start, w: gw, h: 0 }, { x: gx, y: gy + b.start + b.size, w: gw, h: 0 });
+          else out.push({ x: gx + b.start, y: gy, w: 0, h: gh }, { x: gx + b.start + b.size, y: gy, w: 0, h: gh });
+        }
+      }
+    }
+    return out;
   };
   const setGuides2 = (fn) => onChange(j => { const vars = { colors: [], texts: [], ...(j.vars || {}) }; const g = fn({ v: [], h: [], ...(vars.guides || {}) }); return { ...j, vars: { ...vars, guides: g } }; });
   const startGuideDrag = (e, axis, index) => {
@@ -826,9 +897,41 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
     const { shape, x, y, w, h, rx, corners, rot, sides, strokeAlign, text, ...rest } = a;
     return { ...rest, kind: 'path', d: transformPath(cm, [1, 0, 0, 1, 0, 0]), bbox: pathBbox(cm) || a.bbox, fill: a.fill || 'none', color: a.color || '#1f2937', strokeWidth: a.strokeWidth || 2 };
   };
+  // Recortar la imagen de relleno: arrastrar la mueve dentro de la forma; la rueda la acerca o aleja.
+  const startImageCropDrag = (e, a) => {
+    e.stopPropagation(); e.preventDefault();
+    const z = viewportRef.current.zoom || 1;
+    const sx = e.clientX, sy = e.clientY;
+    const f0 = a.imageFill || {};
+    const ox0 = f0.ox || 0, oy0 = f0.oy || 0;
+    const onMove = (ev) => {
+      const dx = (ev.clientX - sx) / z, dy = (ev.clientY - sy) / z;
+      previewChange(j => ({ ...j, annotations: (j.annotations || []).map(x => (x.id === a.id ? { ...x, imageFill: { ...x.imageFill, ox: Math.round(ox0 + dx), oy: Math.round(oy0 + dy) } } : x)) }));
+    };
+    const onUp = () => { window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); commitPreview(); };
+    window.addEventListener('pointermove', onMove); window.addEventListener('pointerup', onUp);
+  };
+  useEffect(() => {
+    if (!cropEdit) return undefined;
+    if (!selAnno.has(cropEdit)) { setCropEdit(null); return undefined; }
+    const onKey = (e) => { if (e.key === 'Escape' || e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); setCropEdit(null); } };
+    const root = containerRef.current;
+    const onWheel = (e) => {
+      const el = e.target.closest && e.target.closest('[data-annotation-id]');
+      if (!el || el.getAttribute('data-annotation-id') !== cropEdit) return;
+      e.preventDefault(); e.stopPropagation();
+      onChange(j => ({ ...j, annotations: (j.annotations || []).map(x => (x.id === cropEdit ? { ...x, imageFill: { ...x.imageFill, scale: Math.max(1, Math.min(8, +((x.imageFill.scale || 1) * (e.deltaY < 0 ? 1.08 : 1 / 1.08)).toFixed(3))) } } : x)) }));
+    };
+    window.addEventListener('keydown', onKey, true);
+    if (root) root.addEventListener('wheel', onWheel, { capture: true, passive: false });
+    return () => { window.removeEventListener('keydown', onKey, true); if (root) root.removeEventListener('wheel', onWheel, { capture: true }); };
+  }, [cropEdit, selAnno]);
   const renderAnnotation = (a0) => {
     if (!a0 || !a0.id) return null;
-    const a = resolveVars(a0, json.vars);   // variables de color del diseño
+    const a = resolveVars(a0, json.vars);   // variables del diseño (modo activo)
+    if (a.hidden) return null;              // oculto por una variable sí/no
+    // Una forma usada como máscara de luminancia / alfa no se pinta: solo da forma a lo que recorta (como en Figma).
+    if ((a.maskType === 'luminance' || a.maskType === 'alpha') && (json.annotations || []).some(x => x.clipTo === a.id)) return null;
     const sel = selAnno.has(a.id);
     const interactive = tool === 'select' || tool === 'eraser' || tool === 'fill' || tool === 'picker';
     const closed = a.kind === 'shape' && CANVAS_CLOSED_SHAPES.has(a.shape);
@@ -836,27 +939,45 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
     let body = null;
     // Un trazo a mano sin `d` (p. ej. un agente le cambió el grosor) se rehace aquí desde sus puntos.
     const pd = a.kind === 'path' ? (a.d || (Array.isArray(a.pts) && a.pts.length ? strokeD(a) : null)) : null;
+    // Varios rellenos / bordes: el dibujo base y, encima, una capa por relleno y por borde.
+    const ps = paintStack(a);
+    const pathBody = (b) => <path d={pd} fill={(b.imageFill && b.imageFill.src) ? 'none' : b.gradient ? `url(#cvg-${b.id})` : (b.fill || 'none')} fillRule={b.fillRule || undefined} stroke={b.color || '#ea580c'} strokeWidth={b.strokeWidth || 2.5} strokeLinecap={b.strokeCap || 'round'} strokeLinejoin={b.strokeJoin || 'round'} opacity={b.opacity != null ? b.opacity : 0.85} strokeDasharray={canvasDashArray(b.dash) || undefined}
+      markerStart={b.startCap && b.startCap !== 'none' ? `url(#${b.id}-ms)` : undefined} markerEnd={b.endCap && b.endCap !== 'none' ? `url(#${b.id}-me)` : undefined} />;
     if (a.kind === 'path' && pd) {
       if (a.variant === 'pen') body = <path d={pd} fill={a.fill || a.color || '#1f2937'} stroke="none" opacity={a.opacity != null ? a.opacity : 1} />;
       else if (a.variant === 'highlighter') body = <path d={pd} fill="none" stroke={a.color || '#f59e0b'} strokeWidth={a.strokeWidth || 12} strokeLinecap="round" strokeLinejoin="round" opacity={a.opacity != null ? a.opacity : 0.35} style={{ mixBlendMode: 'multiply' }} />;
-      else body = <path d={pd} fill={(a.imageFill && a.imageFill.src) ? 'none' : a.gradient ? `url(#cvg-${a.id})` : (a.fill || 'none')} stroke={a.color || '#ea580c'} strokeWidth={a.strokeWidth || 2.5} strokeLinecap="round" strokeLinejoin="round" opacity={a.opacity != null ? a.opacity : 0.85} strokeDasharray={canvasDashArray(a.dash) || undefined} />;
+      else body = pathBody(ps ? ps.base : a);
     } else if (a.kind === 'shape') {
-      body = renderAnnoShape(a, interactive);
+      body = renderAnnoShape(ps ? ps.base : a, interactive);
     } else return null;
     // Degradado y sombra (sobre todo de SVG importados o de agentes): definiciones propias de este dibujo.
     // Imagen como relleno: en pantalla, una <image> recortada con la forma (un <pattern> no se pinta bien en las
     // capas SVG del canvas, que se desbordan de su caja); el borde va encima.
     if (a.imageFill && a.imageFill.src) {
-      const lb = localBox(a), geom = maskGeometry({ ...a, ox: 0, oy: 0, rot: 0 });
-      if (lb && geom) {
-        const par = a.imageFill.fit === 'contain' ? 'xMidYMid meet' : a.imageFill.fit === 'fill' ? 'none' : 'xMidYMid slice';
+      const ig = imageGeom(a), geom = maskGeometry({ ...a, ox: 0, oy: 0, rot: 0 });
+      if (ig && geom) {
+        const adj = hasImageAdjust(a.imageFill) ? imageAdjustSvg(a.imageFill, `cvia-${a.id}`) : '';
+        const cropping = cropEdit === a.id;
         body = <>
           <clipPath id={`cvic-${a.id}`}><path d={geom.d} /></clipPath>
-          <image href={a.imageFill.src} x={lb.x} y={lb.y} width={lb.w} height={lb.h} preserveAspectRatio={par} clipPath={`url(#cvic-${a.id})`} opacity={a.opacity != null ? a.opacity : 1} />
+          {adj && <defs dangerouslySetInnerHTML={{ __html: adj }} />}
+          {/* Recortando: la imagen entera se ve tenue alrededor, para saber dónde queda. */}
+          {cropping && <image href={a.imageFill.src} x={ig.x} y={ig.y} width={ig.w} height={ig.h} preserveAspectRatio={ig.par} opacity={0.3} filter={adj ? `url(#cvia-${a.id})` : undefined} />}
+          <g clipPath={`url(#cvic-${a.id})`}><image href={a.imageFill.src} x={ig.x} y={ig.y} width={ig.w} height={ig.h} preserveAspectRatio={ig.par} opacity={a.opacity != null ? a.opacity : 1} filter={adj ? `url(#cvia-${a.id})` : undefined} /></g>
           {body}
+          {cropping && <rect x={ig.x} y={ig.y} width={ig.w} height={ig.h} fill="none" stroke="var(--accent,#2383E2)" strokeWidth={1} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />}
         </>;
       }
     }
+    if (ps) {
+      body = <>{body}{ps.layers.map(l => (
+        <g key={l.id} style={l.blend && l.blend !== 'normal' ? { mixBlendMode: l.blend } : undefined}>
+          {l.gradient ? annoPaintDefs(l) : null}
+          {a.kind === 'path' ? pathBody(l) : renderAnnoShape(l, false)}
+        </g>
+      ))}</>;
+    }
+    if (a.startCap || a.endCap) { const m = markerSvg(a, a.id); if (m.defs) body = <><defs dangerouslySetInnerHTML={{ __html: m.defs }} />{body}</>; }
     const paintDefs = (a.gradient || hasFilter(a)) ? annoPaintDefs(a) : null;
     if (hasFilter(a)) body = <g filter={`url(#cvs-${a.id})`}>{body}</g>;
     if (paintDefs) body = <>{paintDefs}{body}</>;
@@ -905,9 +1026,9 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
         data-annotation-id={a.id}
         data-hover={(a.anim && a.anim.hover) || undefined} data-loop={(a.anim && a.anim.loop) || undefined}
         transform={`translate(${a.ox || 0} ${a.oy || 0})${shapeRot}`}
-        onPointerDown={tool === 'select' && !editing ? (e) => startAnnoDrag(e, a) : undefined}
+        onPointerDown={tool === 'select' && !editing ? (e) => (cropEdit === a.id ? startImageCropDrag(e, a) : startAnnoDrag(e, a)) : undefined}
         onDoubleClick={tool === 'select' && closed ? (e) => { e.stopPropagation(); setSelAnno(new Set([a.id])); setAnnoTextEdit(a.id); } : (tool === 'select' && a.kind === 'path' && !a.variant && a.d) ? (e) => { e.stopPropagation(); setSelAnno(new Set([a.id])); setVecEdit(a.id); } : undefined}
-        style={{ cursor: tool === 'select' ? 'move' : tool === 'eraser' ? 'crosshair' : 'default', pointerEvents: interactive ? 'visiblePainted' : 'none' }}>
+        style={{ cursor: tool === 'select' ? 'move' : tool === 'eraser' ? 'crosshair' : 'default', pointerEvents: interactive ? 'visiblePainted' : 'none', mixBlendMode: a.blend && a.blend !== 'normal' ? a.blend : undefined }}>
         {body}
         {closed && (a.text || editing) && (
           <foreignObject {...(() => { const tb = shapeTextBox(a.shape, a.x, a.y, Math.max(8, a.w), Math.max(8, a.h)); return { x: tb.x, y: tb.y, width: Math.max(8, tb.w), height: Math.max(8, tb.h) }; })()} style={{ overflow: 'visible' }}>
@@ -935,6 +1056,25 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
       </g>
     );
     if (!clip) return el;
+    // Máscara de luminancia o alfa (como el tipo de máscara de Figma): la forma que recorta se pinta tal cual
+    // (con su degradado) dentro de un <mask>; lo claro (o lo opaco) deja ver, lo oscuro (o transparente) oculta.
+    const mShape = a.clipTo ? annoById.get(a.clipTo) : null;
+    if (mShape && (mShape.maskType === 'luminance' || mShape.maskType === 'alpha')) {
+      const ms = resolveVars(mShape, json.vars);
+      return (
+        <g key={'mask-' + a.id} mask={`url(#cvmask-${a.id})`}>
+          <defs>
+            <mask id={`cvmask-${a.id}`} maskUnits="userSpaceOnUse" x="-100000" y="-100000" width="200000" height="200000" style={{ maskType: mShape.maskType }}>
+              {ms.gradient ? <defs dangerouslySetInnerHTML={{ __html: gradientSvg(ms, `cvg-${ms.id}`) }} /> : null}
+              <g transform={`translate(${ms.ox || 0} ${ms.oy || 0})${ms.rot && ms.w != null ? ` rotate(${ms.rot} ${ms.x + ms.w / 2} ${ms.y + ms.h / 2})` : ''}`}>
+                {ms.kind === 'path' ? <path d={ms.d} fill={ms.gradient ? `url(#cvg-${ms.id})` : (ms.fill && ms.fill !== 'none' ? ms.fill : '#ffffff')} opacity={ms.opacity != null ? ms.opacity : 1} /> : renderAnnoShape({ ...ms, color: 'none', fill: ms.fill && ms.fill !== 'none' ? ms.fill : '#ffffff' }, false)}
+              </g>
+            </mask>
+          </defs>
+          {el}
+        </g>
+      );
+    }
     return (
       <g key={'clip-' + a.id} clipPath={`url(#cvclip-${a.id})`}>
         <defs><clipPath id={`cvclip-${a.id}`} clipPathUnits="userSpaceOnUse"><path d={clip.d} transform={clip.transform || undefined} /></clipPath></defs>
@@ -1463,6 +1603,20 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
         if (cx >= gx && cx <= gx + gw && cy >= gy && cy <= gy + gh) contained.set(n.id, { x: n.x || 0, y: n.y || 0 });
       }
     }
+    // Y también los dibujos y los marcos que tiene dentro (antes se quedaban atrás).
+    const containedA = new Map(), containedG = new Map();
+    if (mode === 'drag') {
+      const gx = group.x || 0, gy = group.y || 0;
+      const gw = group.w || CANVAS_GROUP_DEFAULT_W, gh = group.h || CANVAS_GROUP_DEFAULT_H;
+      const isIn = (b) => { const cx = b.x + b.w / 2, cy = b.y + b.h / 2; return cx >= gx && cx <= gx + gw && cy >= gy && cy <= gy + gh; };
+      for (const a of (json.annotations || [])) if (a.bbox && !lockedIds.has(a.id) && isIn({ x: a.bbox.x + (a.ox || 0), y: a.bbox.y + (a.oy || 0), w: a.bbox.w, h: a.bbox.h })) containedA.set(a.id, { ox: a.ox || 0, oy: a.oy || 0 });
+      for (const g2 of (json.groups || [])) {
+        if (g2.id === group.id) continue;
+        const r = { x: g2.x || 0, y: g2.y || 0, w: g2.w || CANVAS_GROUP_DEFAULT_W, h: g2.h || CANVAS_GROUP_DEFAULT_H };
+        if (r.w * r.h < gw * gh && isIn(r)) containedG.set(g2.id, { x: r.x, y: r.y });
+      }
+    }
+    const origRect = { x: group.x || 0, y: group.y || 0, w: group.w || CANVAS_GROUP_DEFAULT_W, h: group.h || CANVAS_GROUP_DEFAULT_H };
     const onMove = (ev) => {
       if (ev.buttons === 0) { onUp(); return; } // mouseup lost off-window
       const dx = (ev.clientX - startX) / viewportRef.current.zoom;
@@ -1470,11 +1624,15 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
       if (mode === 'drag') {
         previewChange(j => ({
           ...j,
-          groups: j.groups.map(g => g.id === group.id ? { ...g, x: orig.x + dx, y: orig.y + dy } : g),
+          groups: j.groups.map(g => g.id === group.id ? { ...g, x: orig.x + dx, y: orig.y + dy } : containedG.has(g.id) ? { ...g, x: containedG.get(g.id).x + dx, y: containedG.get(g.id).y + dy } : g),
           nodes: (j.nodes || []).map(n => contained.has(n.id) ? { ...n, x: contained.get(n.id).x + dx, y: contained.get(n.id).y + dy } : n),
+          ...(containedA.size ? { annotations: (j.annotations || []).map(a => containedA.has(a.id) ? { ...a, ox: containedA.get(a.id).ox + dx, oy: containedA.get(a.id).oy + dy } : a) } : {}),
         }));
       } else {
-        previewChange(j => ({ ...j, groups: j.groups.map(g => g.id === group.id ? { ...g, w: Math.max(200, orig.w + dx), h: Math.max(120, orig.h + dy) } : g) }));
+        // Redimensionar: los hijos con restricciones siguen a sus bordes (marcos sin auto layout); con auto layout,
+        // el marco recoloca su contenido al soltar.
+        const nw = Math.max(200, orig.w + dx), nh = Math.max(120, orig.h + dy);
+        previewChange(j => applyConstraints({ ...j, groups: j.groups.map(g => g.id === group.id ? { ...g, w: nw, h: nh } : g) }, group.id, origRect, { ...origRect, w: nw, h: nh }));
       }
     };
     const onUp = () => { commitPreview(); window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
@@ -1683,30 +1841,27 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
     if (!selected.size && !selAnno.size) return;
     onChange(j => stepZ(j, new Set(selected), new Set(selAnno), dir));
   };
+  // Alinear / repartir / ordenar: fichas, dibujos y grupos a la vez (un grupo se mueve entero).
+  const selUnits = (j) => selectionUnits(j, new Set(selected), new Set(selAnno));
   const alignSelected = (how) => {
-    if (selected.size < 2) return;
-    onChange(j => {
-      const sel = (j.nodes || []).filter(n => selected.has(n.id));
-      if (sel.length < 2) return j;
-      const W = n => n.w || CANVAS_DEFAULT_NODE_W, H = n => n.h || CANVAS_DEFAULT_NODE_H;
-      const minL = Math.min(...sel.map(n => n.x || 0));
-      const maxR = Math.max(...sel.map(n => (n.x || 0) + W(n)));
-      const minT = Math.min(...sel.map(n => n.y || 0));
-      const maxB = Math.max(...sel.map(n => (n.y || 0) + H(n)));
-      const cx = (minL + maxR) / 2, cy = (minT + maxB) / 2;
-      const pos = new Map();
-      for (const n of sel) {
-        let x = n.x || 0, y = n.y || 0;
-        if (how === 'left') x = minL;
-        else if (how === 'right') x = maxR - W(n);
-        else if (how === 'hcenter') x = cx - W(n) / 2;
-        else if (how === 'top') y = minT;
-        else if (how === 'bottom') y = maxB - H(n);
-        else if (how === 'vcenter') y = cy - H(n) / 2;
-        pos.set(n.id, { x, y });
-      }
-      return { ...j, nodes: (j.nodes || []).map(n => pos.has(n.id) ? { ...n, ...pos.get(n.id) } : n) };
-    });
+    if (selected.size + selAnno.size < 2) return;
+    onChange(j => alignUnits(j, selUnits(j), how));
+  };
+  const tidySelected = () => onChange(j => tidyUp(j, selUnits(j)));
+  const spaceSelected = () => {
+    const u = selUnits(jsonRef.current || {});
+    if (u.length < 2) return;
+    const axis = mainAxis(u);
+    const v = window.prompt(t('canvas.sel.spacing.ask'), String(currentGap(u, axis)));
+    if (v == null || !Number.isFinite(Number(v))) return;
+    onChange(j => spaceUnits(j, selUnits(j), axis, Number(v)));
+  };
+  const selectSameAs = (prop) => {
+    const j = jsonRef.current || {};
+    const ref = selected.size ? (j.nodes || []).find(n => selected.has(n.id)) : (j.annotations || []).find(a => selAnno.has(a.id));
+    if (!ref) return;
+    const r = selectSame(j, ref, prop);
+    setSelected(r.nodes); setSelAnno(r.annos);
   };
   // Bloquear / desbloquear la selección (fichas y anotaciones): lo bloqueado se selecciona pero no se
   // mueve, redimensiona, rota ni borra.
@@ -1747,20 +1902,8 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
   // Distribuye dejando HUECOS IGUALES entre elementos (cuenta los anchos/altos reales, no sólo la
   // posición de la esquina). Los extremos no se mueven; un elemento bloqueado ocupa su sitio pero no se mueve.
   const distributeSelected = (axis) => {
-    if (selected.size < 3) return;
-    onChange(j => {
-      const sel = (j.nodes || []).filter(n => selected.has(n.id));
-      if (sel.length < 3) return j;
-      const k = axis === 'h' ? 'x' : 'y';
-      const pos = (n) => n[k] || 0, size = axis === 'h' ? (n => n.w || CANVAS_DEFAULT_NODE_W) : (n => n.h || CANVAS_DEFAULT_NODE_H);
-      const sorted = [...sel].sort((a, b) => pos(a) - pos(b));
-      const first = sorted[0], last = sorted[sorted.length - 1];
-      const gap = (pos(last) + size(last) - pos(first) - sorted.reduce((t, n) => t + size(n), 0)) / (sorted.length - 1);
-      let cur = pos(first) + size(first) + gap;
-      const to = new Map();
-      for (let i = 1; i < sorted.length - 1; i++) { const n = sorted[i]; if (!n.locked) to.set(n.id, Math.round(cur)); cur += size(n) + gap; }
-      return { ...j, nodes: (j.nodes || []).map(n => to.has(n.id) ? { ...n, [k]: to.get(n.id) } : n) };
-    });
+    if (selected.size + selAnno.size < 3) return;
+    onChange(j => spaceUnits(j, selUnits(j), axis));
   };
 
   // Generic patch over the selected annotations. `null`/`undefined` values
@@ -2642,11 +2785,27 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
   // (SVG del canvas → <canvas>), sin capturar la ventana: no depende del zoom, del tamaño de la
   // ventana ni de Electron. Hasta 4× (lado máximo 8192 px). Las imágenes edinot:// no se pueden
   // resolver fuera de la app (igual que en el SVG): sólo se incrustan las http(s).
-  const exportCanvasPng = async () => {
-    const r = buildCanvasSvg(await inlineExportImages(), true);
+  // Exportar una capa o la selección (modo desarrollador): PNG a 1x/2x/3x con fondo transparente, o SVG.
+  const exportSelection = async (fmt = 'png', scale = 2) => {
+    const only = { nodes: new Set(selected), annos: new Set(selAnno) };
+    if (!only.nodes.size && !only.annos.size) return;
+    const first = [...(json.nodes || []), ...(json.annotations || [])].find(x => only.nodes.has(x.id) || only.annos.has(x.id));
+    const base = String((first && (first.name || (typeof first.text === 'string' && first.text.split('\n')[0]))) || 'capa').replace(/[^\p{L}\p{N} _-]+/gu, '').trim().slice(0, 40) || 'capa';
+    if (fmt === 'svg') {
+      const r = buildCanvasSvg(await inlineExportImages(), false, only);
+      if (!r) return;
+      const url = URL.createObjectURL(new Blob([r.svg], { type: 'image/svg+xml' }));
+      const aEl = document.createElement('a'); aEl.href = url; aEl.download = base + '.svg';
+      document.body.appendChild(aEl); aEl.click(); aEl.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000);
+      return;
+    }
+    return exportCanvasPng({ only, scale, transparent: true, name: `${base}@${scale}x.png` });
+  };
+  const exportCanvasPng = async (opts = {}) => {
+    const r = buildCanvasSvg(await inlineExportImages(), true, opts.only || null);
     if (!r) { window.alert(t('canvas.exportEmpty')); return; }
     try {
-      const scale = Math.max(1, Math.min(4, 8192 / Math.max(r.w, r.h)));
+      const scale = opts.scale || Math.max(1, Math.min(4, 8192 / Math.max(r.w, r.h)));
       const W = Math.max(1, Math.round(r.w * scale)), H = Math.max(1, Math.round(r.h * scale));
       const img = new Image();
       await new Promise((res, rej) => { img.onload = res; img.onerror = () => rej(new Error('No se pudo renderizar el lienzo')); img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(r.svg); });
@@ -2654,13 +2813,13 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
       const g = cv.getContext('2d');
       let bg = '#ffffff';
       try { const c = getComputedStyle(containerRef.current).backgroundColor; if (c && c !== 'rgba(0, 0, 0, 0)' && c !== 'transparent') bg = c; } catch {}
-      g.fillStyle = bg; g.fillRect(0, 0, W, H);
+      if (!opts.transparent) { g.fillStyle = bg; g.fillRect(0, 0, W, H); }
       g.drawImage(img, 0, 0, W, H);
       const blob = await new Promise(res => cv.toBlob(res, 'image/png'));
       if (!blob) throw new Error('No se pudo generar el PNG');
       const url = URL.createObjectURL(blob);
       const a2 = document.createElement('a');
-      a2.href = url; a2.download = 'canvas.png';
+      a2.href = url; a2.download = opts.name || 'canvas.png';
       document.body.appendChild(a2); a2.click(); a2.remove();
       setTimeout(() => URL.revokeObjectURL(url), 4000);
       return { w: W, h: H };
@@ -2777,7 +2936,7 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
     for (const it of mergedOrder(json)) {
       if (only && !(it.type === 'n' ? only.nodes.has(it.id) : only.annos.has(it.id))) continue;
       if (it.type === 'n') { const n = nById.get(it.id); if (n && !n.hidden && !hiddenIds.has(n.id)) nodeToSvg(resolveVars(n, json.vars)); }
-      else { const a = aById.get(it.id); if (a && !a.hidden) parts.push(annoToSvg(resolveVars(a, json.vars), esc, aById)); }
+      else { const a = aById.get(it.id); if (a && !a.hidden && !((a.maskType === 'luminance' || a.maskType === 'alpha') && (json.annotations || []).some(x => x.clipTo === a.id))) parts.push(annoToSvg(resolveVars(a, json.vars), esc, aById)); }
     }
     const svg = `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX} ${minY} ${maxX - minX} ${maxY - minY}" width="${maxX - minX}" height="${maxY - minY}" font-family="sans-serif"><rect x="${minX}" y="${minY}" width="${maxX - minX}" height="${maxY - minY}" fill="#f7f5ee"/>${parts.join('\n')}</svg>`;
     return { svg, w: maxX - minX, h: maxY - minY };
@@ -2808,28 +2967,43 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
       const pat = imageFillSvg(a, `ei-${a.id}`, esc);
       if (pat) { defs.push(pat); a2 = { ...a2, fill: `url(#ei-${a.id})` }; }
     }
-    let body = annoToSvgBody(a2, esc);
+    const ps = paintStack(a);
+    let body = annoToSvgBody(ps ? { ...a2, color: ps.base.color } : a2, esc);
     if (!body) return '';
+    if (a.startCap || a.endCap) {
+      const m = markerSvg(a, 'em-' + a.id, esc);
+      if (m.defs) { defs.push(m.defs); body = body.replace(/<(path|line)\b/, `<$1${m.start ? ` marker-start="${m.start}"` : ''}${m.end ? ` marker-end="${m.end}"` : ''}`); }
+    }
+    if (ps) body += ps.layers.map(l => { const inner = annoToSvg(l, esc, null); return l.blend && l.blend !== 'normal' ? `<g style="mix-blend-mode:${l.blend}">${inner}</g>` : inner; }).join('');
     const fx = annoFilterSvg(a, esc, 'ef-' + a.id);
     if (fx) { defs.push(fx); body = `<g filter="url(#ef-${a.id})">${body}</g>`; }
     const clip = (a.clipTo || a.clip) && aById ? clipFor(a, aById) : null;
-    if (clip) { defs.push(`<clipPath id="ec-${a.id}" clipPathUnits="userSpaceOnUse"><path d="${esc(clip.d)}"${clip.transform ? ` transform="${clip.transform}"` : ''}/></clipPath>`); body = `<g clip-path="url(#ec-${a.id})">${body}</g>`; }
-    return (defs.length ? `<defs>${defs.join('')}</defs>` : '') + body;
+    const mShape = clip && a.clipTo && aById ? aById.get(a.clipTo) : null;
+    if (mShape && (mShape.maskType === 'luminance' || mShape.maskType === 'alpha')) {
+      // Máscara de luminancia / alfa: la forma con su pintura (degradado incluido) dentro de un <mask>.
+      let ms = { ...mShape, color: 'none', fill: mShape.fill && mShape.fill !== 'none' ? mShape.fill : '#ffffff' };
+      let gdef = '';
+      if (ms.gradient && Array.isArray(ms.gradient.stops)) { gdef = gradientSvg(ms, `emg-${a.id}`, esc); ms = { ...ms, fill: `url(#emg-${a.id})` }; }
+      defs.push(`<mask id="emk-${a.id}" maskUnits="userSpaceOnUse" x="-100000" y="-100000" width="200000" height="200000" style="mask-type:${mShape.maskType}">${gdef}${annoToSvgBody(ms, esc)}</mask>`);
+      body = `<g mask="url(#emk-${a.id})">${body}</g>`;
+    } else if (clip) { defs.push(`<clipPath id="ec-${a.id}" clipPathUnits="userSpaceOnUse"><path d="${esc(clip.d)}"${clip.transform ? ` transform="${clip.transform}"` : ''}/></clipPath>`); body = `<g clip-path="url(#ec-${a.id})">${body}</g>`; }
+    const out = (defs.length ? `<defs>${defs.join('')}</defs>` : '') + body;
+    return a.blend && a.blend !== 'normal' ? `<g style="mix-blend-mode:${a.blend}">${out}</g>` : out;
   };
   const annoToSvgBody = (a, esc) => {
     const tr = (a.ox || a.oy) ? ` transform="translate(${a.ox || 0} ${a.oy || 0})"` : '';
-    const dash = a.dash === 'dashed' ? ' stroke-dasharray="8 4"' : a.dash === 'dotted' ? ' stroke-dasharray="2 4"' : '';
+    const dash = canvasDashArray(a.dash) ? ` stroke-dasharray="${canvasDashArray(a.dash)}"` : '';
     const op = a.opacity != null ? a.opacity : 1;
     if (a.kind === 'path' && !a.d && Array.isArray(a.pts) && a.pts.length) a = { ...a, d: strokeD(a) };   // grosor cambiado por un agente
     if (a.kind === 'path' && a.d) {
       if (a.variant === 'pen') return `<path d="${esc(a.d)}" fill="${esc(a.fill || a.color || '#1f2937')}" stroke="none" opacity="${op}"${tr}/>`;
       if (a.variant === 'highlighter') return `<path d="${esc(a.d)}" fill="none" stroke="${esc(a.color || '#f59e0b')}" stroke-width="${a.strokeWidth || 12}" stroke-linecap="round" opacity="${a.opacity != null ? a.opacity : 0.35}"${tr}/>`;
-      return `<path d="${esc(a.d)}" fill="${esc(a.fill || 'none')}" stroke="${esc(a.color || '#ea580c')}" stroke-width="${a.strokeWidth || 2.5}" stroke-linecap="round" opacity="${a.opacity != null ? a.opacity : 0.85}"${dash}${tr}/>`;
+      return `<path d="${esc(a.d)}" fill="${esc(a.fill || 'none')}"${a.fillRule ? ` fill-rule="${a.fillRule}"` : ''} stroke="${esc(a.color || '#ea580c')}" stroke-width="${a.strokeWidth || 2.5}" stroke-linecap="${a.strokeCap || 'round'}" stroke-linejoin="${a.strokeJoin || 'round'}" opacity="${a.opacity != null ? a.opacity : 0.85}"${dash}${tr}/>`;
     }
     if (a.kind !== 'shape') return '';
     const stroke = a.color || '#1f2937', sw = a.strokeWidth || 2, fill = a.fill && a.fill !== 'none' ? a.fill : 'none';
     const rot = (a.rot && CANVAS_CLOSED_SHAPE_SET.has(a.shape)) ? ` transform="translate(${a.ox || 0} ${a.oy || 0}) rotate(${a.rot} ${a.x + a.w / 2} ${a.y + a.h / 2})"` : tr;
-    const common = `fill="${esc(fill)}" stroke="${esc(stroke)}" stroke-width="${sw}" opacity="${op}"${dash}${rot}`;
+    const common = `fill="${esc(fill)}" stroke="${esc(stroke)}" stroke-width="${sw}" opacity="${op}"${a.strokeJoin ? ` stroke-linejoin="${a.strokeJoin}"` : ''}${dash}${rot}`;
     let body = '';
     if (a.sketch) {
       const g = `<g opacity="${op}"${rot}>${sketchSvg(sketchShapePaths(a), dash)}${a.shape === 'arrow' ? `<path d="${arrowHeadPath(a.x1, a.y1, a.x2, a.y2, sw)}" fill="${esc(stroke)}"/>` : ''}</g>`;
@@ -2847,7 +3021,7 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
     else if (a.shape === 'ellipse') body = `<ellipse cx="${a.x + a.w / 2}" cy="${a.y + a.h / 2}" rx="${a.w / 2}" ry="${a.h / 2}" ${common}/>`;
     else if (a.shape === 'diamond') { const cx = a.x + a.w / 2, cy = a.y + a.h / 2; body = `<path d="M ${cx} ${a.y} L ${a.x + a.w} ${cy} L ${cx} ${a.y + a.h} L ${a.x} ${cy} Z" ${common}/>`; }
     else if (NEW_SHAPES.includes(a.shape)) body = `<g${rot}>${shapeParts(a.shape, a.x, a.y, a.w, a.h).map(part => `<path d="${part.d}" fill="${part.fill ? esc(fill) : 'none'}" stroke="${esc(stroke)}" stroke-width="${sw}" stroke-linejoin="round" opacity="${op}"${dash}/>`).join('')}</g>`;
-    else if (a.shape === 'line') body = `<line x1="${a.x1}" y1="${a.y1}" x2="${a.x2}" y2="${a.y2}" stroke="${esc(stroke)}" stroke-width="${sw}" stroke-linecap="round" opacity="${op}"${dash}${tr}/>`;
+    else if (a.shape === 'line') body = `<line x1="${a.x1}" y1="${a.y1}" x2="${a.x2}" y2="${a.y2}" stroke="${esc(stroke)}" stroke-width="${sw}" stroke-linecap="${a.strokeCap || 'round'}" opacity="${op}"${dash}${tr}/>`;
     else if (a.shape === 'arrow') body = `<g${tr}><line x1="${a.x1}" y1="${a.y1}" x2="${a.x2}" y2="${a.y2}" stroke="${esc(stroke)}" stroke-width="${sw}" stroke-linecap="round" opacity="${op}"${dash}/><path d="${arrowHeadPath(a.x1, a.y1, a.x2, a.y2, sw)}" fill="${esc(stroke)}" opacity="${op}"/></g>`;
     if (a.text && CANVAS_CLOSED_SHAPE_SET.has(a.shape)) {
       const tb = shapeTextBox(a.shape, a.x, a.y, a.w, a.h);
@@ -3001,12 +3175,63 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
     if (vpAnimRef.current) { cancelAnimationFrame(vpAnimRef.current); vpAnimRef.current = null; }
     slideshowRef.current = null;
     setSlideshow(null);
+    setProto(null); protoStackRef.current = []; navHistRef.current = [];
+    for (const tm of protoTimersRef.current) clearTimeout(tm); protoTimersRef.current = [];
     if (!slideshowWasFullscreenRef.current) setFullscreen(false);
   }, []);
   const endSlideshowRef = useRef(endSlideshow);
   useEffect(() => { endSlideshowRef.current = endSlideshow; }, [endSlideshow]);
 
+  // Medidas del modo desarrollador: con un elemento seleccionado, mantener Alt y pasar por encima de otro muestra la
+  // distancia entre ambos (sin otro debajo, hasta los bordes de su marco), como en Figma.
+  useEffect(() => {
+    const root = containerRef.current;
+    if (!root) return undefined;
+    let last = null;
+    const rectOf = (kind, id) => {
+      const j = jsonRef.current || {};
+      if (kind === 'n') { const n = (j.nodes || []).find(x => x.id === id); return n ? canvasNodeRect(n) : null; }
+      if (kind === 'a') { const a = (j.annotations || []).find(x => x.id === id); return a && a.bbox ? { x: a.bbox.x + (a.ox || 0), y: a.bbox.y + (a.oy || 0), w: a.bbox.w, h: a.bbox.h } : null; }
+      const g = (j.groups || []).find(x => x.id === id);
+      return g ? { x: g.x || 0, y: g.y || 0, w: g.w || CANVAS_GROUP_DEFAULT_W, h: g.h || CANVAS_GROUP_DEFAULT_H } : null;
+    };
+    const selRect = () => {
+      const rs = [...selected].map(id => rectOf('n', id)).concat([...selAnno].map(id => rectOf('a', id))).filter(Boolean);
+      if (!rs.length) return null;
+      const x = Math.min(...rs.map(r => r.x)), y = Math.min(...rs.map(r => r.y));
+      return { x, y, w: Math.max(...rs.map(r => r.x + r.w)) - x, h: Math.max(...rs.map(r => r.y + r.h)) - y };
+    };
+    const update = (e) => {
+      if (!e || !e.altKey || slideshowRef.current) { if (last) { last = null; setMeasure(null); } return; }
+      const a = selRect();
+      if (!a) return;
+      let b = null;
+      for (const el of document.elementsFromPoint(e.clientX, e.clientY)) {
+        if (!root.contains(el)) continue;
+        const nEl = el.closest('[data-node-id]'), aEl = el.closest('[data-annotation-id]'), gEl = el.closest('[data-group-id]');
+        if (aEl && !selAnno.has(aEl.getAttribute('data-annotation-id'))) { b = rectOf('a', aEl.getAttribute('data-annotation-id')); break; }
+        if (nEl && !selected.has(nEl.getAttribute('data-node-id'))) { b = rectOf('n', nEl.getAttribute('data-node-id')); break; }
+        if (gEl) { b = rectOf('g', gEl.getAttribute('data-group-id')); break; }
+      }
+      const m = b ? measureBetween(a, b) : null;
+      const key = JSON.stringify(m);
+      if (key !== last) { last = key; setMeasure(m && m.length ? m : null); }
+    };
+    let lastEv = null;
+    const onMove = (e) => { lastEv = e; update(e); };
+    const onKey = (e) => { if (e.key === 'Alt') { if (e.type === 'keydown') e.preventDefault(); update(lastEv && { clientX: lastEv.clientX, clientY: lastEv.clientY, altKey: e.type === 'keydown' }); } };
+    root.addEventListener('pointermove', onMove);
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('keyup', onKey);
+    return () => { root.removeEventListener('pointermove', onMove); window.removeEventListener('keydown', onKey); window.removeEventListener('keyup', onKey); };
+  }, [selected, selAnno]);
+
   const goToSlideRef = useRef(null);
+  const protoStackRef = useRef([]);    // cambios del prototipo (funciones json → json), en orden
+  const navHistRef = useRef([]);       // pantallas visitadas, para «Atrás»
+  const protoTimersRef = useRef([]);   // «tras un tiempo» de la pantalla actual
+  const pushProto = (fn) => { protoStackRef.current = [...protoStackRef.current, fn]; const st = protoStackRef.current; setProto(() => (j) => st.reduce((acc, f) => f(acc), j)); return st.length - 1; };
+  const dropProto = (i) => { const st = protoStackRef.current.filter((_, k) => k !== i); protoStackRef.current = st; setProto(st.length ? () => (j) => st.reduce((acc, f) => f(acc), j) : null); };
   const goToSlide = useCallback((idx, how = 'move') => {
     const ss = slideshowRef.current;
     if (!ss) return;
@@ -3056,6 +3281,13 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
     const next = { ...ss, idx };
     slideshowRef.current = next;
     setSlideshow(next);
+    for (const tm of protoTimersRef.current) clearTimeout(tm);
+    protoTimersRef.current = [];
+    if (g) {
+      for (const { item, inter } of frameInteractions(protoJsonRef.current || {}, frameItems(protoJsonRef.current || {}, g), 'delay')) {
+        protoTimersRef.current.push(setTimeout(() => { if (slideshowRef.current && slideshowRef.current.idx === idx) runInteractionRef.current && runInteractionRef.current(inter, item); }, Math.max(0, Number(inter.delay) || 800)));
+      }
+    }
     if (ss.auto) {
       const dur = Math.max(1500, Math.min(60000, Number(slide.durationMs) || 7000));
       slideTimerRef.current = setTimeout(() => goToSlideRef.current && goToSlideRef.current(idx + 1), dur);
@@ -3075,7 +3307,7 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
       }).filter(Boolean);
     } else {
       // Explicit `order` field wins over array order (set via MCP or future UI).
-      const ordered = groups
+      const ordered = groups.filter(g => !g.section)
         .map((g, i) => ({ g, o: g.order != null ? Number(g.order) : i }))
         .sort((a, b) => a.o - b.o)
         .map(x => x.g);
@@ -3108,29 +3340,87 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
     const z = viewportRef.current.zoom || 1;
     setOverlay({ src, w: r.w * z, h: r.h * z });
   };
+  // Ejecuta una interacción del prototipo. Devuelve el índice del cambio temporal (para deshacerlo al soltar / salir).
+  const runInteractionRef = useRef(null);
+  runInteractionRef.current = (inter, item) => {
+    const ss = slideshowRef.current;
+    if (!ss) return null;
+    const j = protoJsonRef.current || {};
+    const go = (link, anim) => {
+      let idx = ss.slides.findIndex(sl => sl.groupId === link);
+      if (idx < 0) {
+        // La pantalla de destino no está en la presentación: se añade al final y se va a ella.
+        const g = (j.groups || []).find(x => x.id === link || String(x.title || '').toLowerCase() === String(link).toLowerCase());
+        if (!g) return;
+        idx = ss.slides.findIndex(sl => sl.groupId === g.id);
+        if (idx < 0) {
+          const next = { ...ss, slides: [...ss.slides, { groupId: g.id, title: g.title || '', message: '' }] };
+          slideshowRef.current = next; setSlideshow(next); idx = next.slides.length - 1;
+        }
+      }
+      navHistRef.current.push(ss.idx);
+      goToSlideRef.current && goToSlideRef.current(idx, anim || 'move');
+    };
+    switch (inter.action) {
+      case 'navigate': go(inter.target, inter.anim); return null;
+      case 'overlay': openOverlay(inter.target); return null;
+      case 'close': setOverlay(null); return null;
+      case 'back': { const prev = navHistRef.current.pop(); if (prev != null) goToSlideRef.current && goToSlideRef.current(prev, inter.anim || 'move'); return null; }
+      case 'url': if (inter.target) window.open(String(inter.target), '_blank', 'noopener'); return null;
+      case 'scrollTo': {
+        const g = (j.groups || []).find(x => x.id === (ss.slides[ss.idx] || {}).groupId);
+        const tgt = [...(j.nodes || []), ...(j.annotations || [])].find(x => x.id === inter.target);
+        if (!g || !tgt) return null;
+        const ty = tgt.bbox ? tgt.bbox.y + (tgt.oy || 0) : canvasNodeRect(tgt).y;
+        const want = Math.max(0, ty - (g.y || 0) - 40);
+        const d = want - presScrollRef.current;
+        const z = viewportRef.current.zoom || 1;
+        presScrollRef.current = want; setPresScroll(want);
+        setViewport(v => ({ ...v, y: v.y - d * z }));
+        return null;
+      }
+      case 'variant': {
+        if (!item || !item.grp) return null;
+        const inst = [...(j.nodes || []), ...(j.annotations || [])].find(x => x.grp === item.grp && x.cinst);
+        if (!inst) return null;
+        const v = variantsOf(j, inst.cinst).find(x => x.id === inter.target || String(x.variant).toLowerCase() === String(inter.target).toLowerCase());
+        if (!v || v.id === inst.cinst) return null;
+        const grp = item.grp;
+        return pushProto((jj) => switchVariant(jj, grp, v.id, (p) => p + 'proto' + grp));
+      }
+      case 'setVar': {
+        const f = findVar(j.vars || {}, inter.var);
+        if (!f) return null;
+        let val = inter.value;
+        if (val === 'toggle' && f.kind === 'bools') { const cur = varValue(j.vars, 'bools', inter.var); val = !(cur === true || cur === 'true'); }
+        else if (f.kind === 'nums' && /^[+-]\d/.test(String(val))) val = Number(varValue(j.vars, 'nums', inter.var) || 0) + Number(val);
+        return pushProto((jj) => withVar(jj, inter.var, val));
+      }
+      default: return null;
+    }
+  };
   // Prototipo: presentando, pulsar un elemento con `link` (el id de un marco) lleva a esa pantalla. Vale con
   // pulsar cualquier pieza de su grupo (un botón y su texto).
   useEffect(() => {
     if (!slideshow) return undefined;
     const root = containerRef.current;
     if (!root) return undefined;
-    const linkOf = (el) => {
+    const itemOf = (el) => {
       const nEl = el.closest && el.closest('[data-node-id]'), aEl = el.closest && el.closest('[data-annotation-id]');
-      const j = jsonRef.current || {};
-      let item = null;
-      if (aEl) item = (j.annotations || []).find(a => a.id === aEl.getAttribute('data-annotation-id'));
-      else if (nEl) item = (j.nodes || []).find(n => n.id === nEl.getAttribute('data-node-id'));
-      if (!item) return null;
-      if (item.link) return { link: item.link, anim: item.linkAnim, mode: item.linkMode };
-      if (item.grp) { const m = [...(j.nodes || []), ...(j.annotations || [])].find(x => x.grp === item.grp && x.link); if (m) return { link: m.link, anim: m.linkAnim, mode: m.linkMode }; }
+      const j = protoJsonRef.current || {};
+      if (aEl) return (j.annotations || []).find(a => a.id === aEl.getAttribute('data-annotation-id')) || null;
+      if (nEl) return (j.nodes || []).find(n => n.id === nEl.getAttribute('data-node-id')) || null;
       return null;
     };
-    // Lo que hay bajo el puntero, de arriba abajo: un texto encima de un botón no tapa el enlace del botón.
-    const linkAt = (e) => {
+    // Lo que hay bajo el puntero, de arriba abajo: un texto encima de un botón no tapa la interacción del botón.
+    const hitAt = (e, trigger) => {
+      const j = protoJsonRef.current || {};
       for (const el of document.elementsFromPoint(e.clientX, e.clientY)) {
         if (!root.contains(el)) continue;
-        const l = linkOf(el);
-        if (l) return l;
+        const item = itemOf(el);
+        if (!item) continue;
+        const list = interactionsOf(item, j).filter(x => (trigger ? x.trigger === trigger : true) && condOk(x, j.vars));
+        if (list.length) return { item, list };
       }
       return null;
     };
@@ -3138,24 +3428,29 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
       if (e.target.closest && e.target.closest('.canvas-present-bar, .canvas-present-msg')) return;
       const ss = slideshowRef.current;
       if (!ss) return;
-      // Presentando, los clics no editan (como el modo prototipo de Figma): solo siguen enlaces.
+      // Presentando, los clics no editan (como el modo prototipo de Figma): solo siguen interacciones.
       e.preventDefault(); e.stopPropagation();
       if (overlayRef.current) { if (!(e.target.closest && e.target.closest('.canvas-overlay-img'))) setOverlay(null); return; }
-      const hit = linkAt(e);
-      if (!hit) return;
-      const link = hit.link;
-      if (hit.mode === 'overlay') { openOverlay(link); return; }
-      let idx = ss.slides.findIndex(sl => sl.groupId === link);
-      if (idx < 0) {
-        // La pantalla de destino no está en la presentación: se añade al final y se va a ella.
-        const g = (jsonGroupsRef.current || []).find(x => x.id === link);
-        if (!g) return;
-        const next = { ...ss, slides: [...ss.slides, { groupId: g.id, title: g.title || '', message: '' }] };
-        slideshowRef.current = next; setSlideshow(next); idx = next.slides.length - 1;
+      const press = hitAt(e, 'press');
+      if (press) {
+        const ids = press.list.map(x => runInteractionRef.current(x, press.item)).filter(i => i != null);
+        const up = () => { window.removeEventListener('pointerup', up, true); ids.reverse().forEach(i => dropProto(i)); };
+        window.addEventListener('pointerup', up, true);
       }
-      goToSlideRef.current && goToSlideRef.current(idx, hit.anim || 'move');
+      const hit = hitAt(e, 'click');
+      if (!hit) return;
+      for (const x of hit.list) runInteractionRef.current(x, hit.item);
     };
-    const onMove = (e) => { root.style.cursor = linkAt(e) ? 'pointer' : ''; };
+    // «Al pasar por encima»: se aplica al entrar y se deshace al salir.
+    let hoverOn = null;
+    const onHover = (e) => {
+      const h = hitAt(e, 'hover');
+      const key = h ? (h.item.grp || h.item.id) : null;
+      if (hoverOn && hoverOn.key === key) return;
+      if (hoverOn) { hoverOn.ids.slice().reverse().forEach(i => dropProto(i)); hoverOn = null; }
+      if (h) hoverOn = { key, ids: h.list.map(x => runInteractionRef.current(x, h.item)).filter(i => i != null) };
+    };
+    const onMove = (e) => { root.style.cursor = hitAt(e, 'click') ? 'pointer' : ''; onHover(e); };
     // Pantalla desplazable (marco con `scroll`): la rueda recorre el contenido que sigue por debajo del marco.
     const onWheel = (e) => {
       const ss = slideshowRef.current; if (!ss) return;
@@ -3195,6 +3490,14 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
       const tag = e.target && e.target.tagName;
       const typing = tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable);
       if (typing && e.key !== 'Escape') return;
+      // Interacciones «al pulsar una tecla» de la pantalla actual, antes que la navegación normal.
+      if (e.key !== 'Escape') {
+        const jj = protoJsonRef.current || {};
+        const g = (jj.groups || []).find(x => x.id === (ss.slides[ss.idx] || {}).groupId);
+        const hits = g ? frameInteractions(jj, frameItems(jj, g), 'key').filter(h => String(h.inter.key || '').toLowerCase() === e.key.toLowerCase() && condOk(h.inter, jj.vars)) : [];
+        if (hits.length) { e.preventDefault(); e.stopPropagation(); for (const h of hits) runInteractionRef.current(h.inter, h.item); return; }
+        if (e.key === 'Backspace' && navHistRef.current.length) { e.preventDefault(); e.stopPropagation(); runInteractionRef.current({ action: 'back' }); return; }
+      }
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); endSlideshow(); }
       else if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown' || e.key === 'Enter') {
         e.preventDefault(); e.stopPropagation(); goToSlideRef.current(ss.idx + 1);
@@ -3524,7 +3827,8 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
           }} />
           <CanvasActions snapGrid={snapGrid} fullscreen={fullscreen} a={{
             canvasUndo, canvasRedo, doAutoLayout, fitToContent,
-            exportCanvasPng, exportCanvasSvg,
+            exportCanvasPng: () => exportCanvasPng(), exportCanvasSvg,
+            openVersions: activeNoteId ? () => setVerOpen(true) : null,
             startTimer, stopTimer, startVote, endVote, closeVote,
             sessionTimer: !!(session && session.timer), sessionVote: (session && session.vote) || null,
             toggleSnap: () => setSnapGrid(v => !v),
@@ -3641,16 +3945,47 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
           { label: t('canvas.al.none'), checked: chk(!L), onSelect: () => set(null) },
           { label: t('canvas.al.column'), checked: chk(L && L.dir !== 'row'), onSelect: () => set({ dir: 'column' }) },
           { label: t('canvas.al.row'), checked: chk(L && L.dir === 'row'), onSelect: () => set({ dir: 'row' }) },
+          { label: t('canvas.al.grid'), checked: chk(L && L.dir === 'grid'), onSelect: () => set({ dir: 'grid', columns: (L && L.columns) || 2 }) },
           ...(L ? [
             { type: 'sep' },
+            ...(L.dir === 'grid' ? [
+              { label: t('canvas.al.columns'), submenu: () => [1, 2, 3, 4, 5, 6, 8, 12].map(v => ({ label: String(v), checked: chk((L.columns || 2) === v), onSelect: () => set({ columns: v }) })) },
+              { label: t('canvas.al.gapY'), submenu: () => [0, 8, 12, 16, 24, 32].map(v => ({ label: `${v} px`, checked: chk((L.gapY ?? L.gap ?? 16) === v), onSelect: () => set({ gapY: v }) })) },
+            ] : [
+              { label: t('canvas.al.wrap'), checked: chk(L.wrap), onSelect: () => set({ wrap: !L.wrap }) },
+              ...(L.wrap ? [{ label: t('canvas.al.gapCross'), submenu: () => [0, 8, 12, 16, 24, 32].map(v => ({ label: `${v} px`, checked: chk((L.gapCross ?? L.gap ?? 16) === v), onSelect: () => set({ gapCross: v }) })) }] : []),
+            ]),
             { label: t('canvas.al.gap'), submenu: () => [0, 4, 8, 12, 16, 24, 32, 48].map(v => ({ label: `${v} px`, checked: chk((L.gap ?? 16) === v), onSelect: () => set({ gap: v }) })) },
             { label: t('canvas.al.pad'), submenu: () => [0, 8, 12, 16, 24, 32, 48].map(v => ({ label: `${v} px`, checked: chk((L.pad ?? 16) === v), onSelect: () => set({ pad: v }) })) },
             { label: t('canvas.al.align'), submenu: () => ['start', 'center', 'end'].map(v => ({ label: t('canvas.al.align.' + v), checked: chk((L.align || 'start') === v), onSelect: () => set({ align: v }) })) },
             { label: t('canvas.al.hug'), checked: chk(L.hug), onSelect: () => set({ hug: !L.hug }) },
           ] : []),
           { type: 'sep' },
-          { label: t('canvas.grid.cols'), submenu: () => [0, 2, 4, 6, 8, 12].map(c => ({ label: c ? t('canvas.grid.n', { n: c }) : t('canvas.grid.none'), checked: chk(((g.grid && g.grid.columns) || 0) === c),
-            onSelect: () => onChange(j => ({ ...j, groups: (j.groups || []).map(x => x.id === g.id ? (c ? { ...x, grid: { gutter: 16, margin: 16, ...(x.grid || {}), columns: c } } : (({ grid, ...r }) => r)(x)) : x) })) })) },
+          ...(() => {
+            // Rejillas de guía (como las «layout grids» de Figma): columnas, filas y cuadrícula, combinables.
+            const grids = frameGrids(g);
+            const setGrids = (fn) => onChange(j => ({ ...j, groups: (j.groups || []).map(x => {
+              if (x.id !== g.id) return x;
+              const { grid, ...r } = x;
+              const next = fn(frameGrids(x));
+              return next.length ? { ...r, grids: next } : (({ grids: _g, ...r2 }) => r2)(r);
+            }) }));
+            const has = (type, v) => grids.some(q => q.type === type && (type === 'grid' ? q.size === v : q.count === v));
+            const toggle = (type, v) => setGrids(list => {
+              const rest = list.filter(q => q.type !== type);
+              return has(type, v) ? rest : [...rest, type === 'grid' ? { type, size: v } : { type, count: v, gutter: 16, margin: 16 }];
+            });
+            return [{ label: t('canvas.grid.guides'), submenu: () => [
+              { type: 'head', label: t('canvas.grid.cols') },
+              ...[2, 4, 6, 8, 12].map(c => ({ label: t('canvas.grid.n', { n: c }), checked: chk(has('columns', c)), onSelect: () => toggle('columns', c) })),
+              { type: 'head', label: t('canvas.grid.rows') },
+              ...[4, 6, 8, 12].map(c => ({ label: t('canvas.grid.nr', { n: c }), checked: chk(has('rows', c)), onSelect: () => toggle('rows', c) })),
+              { type: 'head', label: t('canvas.grid.square') },
+              ...[8, 16, 24].map(v => ({ label: `${v} px`, checked: chk(has('grid', v)), onSelect: () => toggle('grid', v) })),
+              { type: 'sep' },
+              { label: t('canvas.grid.none'), onSelect: () => setGrids(() => []) },
+            ] }];
+          })(),
           { label: t('canvas.exportHtml'), onSelect: () => {
             const html = frameToHtml(json, g);
             const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
@@ -3658,12 +3993,21 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
             document.body.appendChild(aEl); aEl.click(); aEl.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000);
           } },
           { label: t('canvas.al.scroll'), checked: chk(g.scroll), onSelect: () => onChange(j => ({ ...j, groups: (j.groups || []).map(x => x.id === g.id ? (x.scroll ? (({ scroll, ...r }) => r)(x) : { ...x, scroll: true }) : x) })) },
+          { label: t('canvas.resp.open'), onSelect: () => setRespPrev({ id: g.id, rect: frameRect(g), w: frameRect(g).w }) },
+          { label: t('canvas.section'), checked: chk(g.section), onSelect: () => onChange(j => ({ ...j, groups: (j.groups || []).map(x => x.id === g.id ? (x.section ? (({ section, ...r }) => r)(x) : { ...x, section: true }) : x) })) },
         ];
         return <Menu anchor={layoutMenu.anchor} items={items} onClose={() => setLayoutMenu(null)} minWidth={230} label={t('canvas.autolayout')} className="cv-menu" />;
       })()}
       {propsOpen && (
         <CanvasPropsPanel json={json} selected={selected} selAnno={selAnno} onChange={onChange} onClose={() => setPropsOpen(false)}
           library={library}
+          onExport={exportSelection}
+          pages={pageList} curPage={curPage || (pageList[0] && pageList[0].id) || null} onSetPage={(id) => { setPage(id); setSelected(new Set()); setSelAnno(new Set()); }}
+          onAddPage={() => { const nm = window.prompt(t('canvas.page.name'), t('canvas.page.n', { n: Math.max(2, pageList.length + 1) })); if (!nm) return; let nid = null; onChangeRaw(j => { const r = addPage(j, nm, undefined, t('canvas.page.n', { n: 1 })); nid = r.id; return r.json; }); setTimeout(() => nid && setPage(nid), 0); }}
+          onRenamePage={(id, nm) => onChangeRaw(j => renamePage(j, id, nm))}
+          onRemovePage={async (id) => { const ok = askConfirm ? await askConfirm(t('canvas.page.delAsk')) : window.confirm(t('canvas.page.delAsk')); if (ok) onChangeRaw(j => removePage(j, id)); }}
+          cropEdit={cropEdit} onCropEdit={setCropEdit}
+          onSetInstanceProp={(grp, name, value) => onChange(j => syncInstances(setInstanceProp(j, grp, name, value, library), library))}
           onInsertLib={(entry) => { const c = canvasCenter(200, 80); const r = insertFromLibrary(json, entry, c, (p) => (p === 'n' ? canvasNodeId() : canvasAnnoId())); if (r.ids) { onChange(() => r.json); setSelected(new Set(r.ids.nodes)); setSelAnno(new Set(r.ids.annos)); } }}
           onRemoveLib={(id) => yMeta.set('componentLibrary', library.filter(e => e.id !== id))}
           uploadImage={onUploadAttachment ? async (file) => { const info = await onUploadAttachment(file); return info ? (info.url || (info.sha ? `edinot://blob/${info.sha}` : '')) : ''; } : null}
@@ -3738,17 +4082,21 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
             onClick={(e) => setSelMenu(e.currentTarget.getBoundingClientRect())}><span className="fmt-ic">⋯</span></button>
           {selMenu && (() => {
             const n = selected.size;
+            const units = selected.size + selAnno.size;
             const items = [
-              ...(n >= 2 ? [
+              ...(units >= 2 ? [
                 { label: t('canvas.sel.alignLeft'), onSelect: () => alignSelected('left') },
                 { label: t('canvas.sel.alignHCenter'), onSelect: () => alignSelected('hcenter') },
                 { label: t('canvas.sel.alignRight'), onSelect: () => alignSelected('right') },
                 { label: t('canvas.sel.alignTop'), onSelect: () => alignSelected('top') },
                 { label: t('canvas.sel.alignVCenter'), onSelect: () => alignSelected('vcenter') },
                 { label: t('canvas.sel.alignBottom'), onSelect: () => alignSelected('bottom') },
-                ...(n >= 3 ? [{ label: t('canvas.sel.distH'), onSelect: () => distributeSelected('h') }, { label: t('canvas.sel.distV'), onSelect: () => distributeSelected('v') }] : []),
+                ...(units >= 3 ? [{ label: t('canvas.sel.distH'), onSelect: () => distributeSelected('h') }, { label: t('canvas.sel.distV'), onSelect: () => distributeSelected('v') }] : []),
+                { label: t('canvas.sel.tidy'), onSelect: tidySelected },
+                { label: t('canvas.sel.spacing'), onSelect: spaceSelected },
                 { type: 'sep' },
               ] : []),
+              ...(units === 1 ? [{ label: t('canvas.sel.same'), submenu: () => SAME_KINDS.map(k => ({ label: t('canvas.same.' + k), onSelect: () => selectSameAs(k) })) }, { type: 'sep' }] : []),
               // «Recortar»: la de más abajo (en el orden de apilado) recorta a las demás. Solo si esa es una forma cerrada.
               ...(() => {
                 if (selAnno.size < 2) return [];
@@ -3822,6 +4170,7 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
                     if (r.ids) { onChange(() => r.json); setSelected(new Set(r.ids.nodes)); setSelAnno(new Set(r.ids.annos)); }
                   } });
                   if (items.some(x => x.cinst)) out.push({ label: t('canvas.cmp.detach'), onSelect: () => onChange(j => detachInstances(j, [...selected], [...selAnno])) });
+                  if (items.some(x => x.cinst)) out.push({ label: t('canvas.cmp.reset'), onSelect: () => { const g = items.find(x => x.cinst).grp; onChange(j => resetOverrides(j, g, library)); } });
                   if (items.some(x => x.cmain)) out.push({ label: library.some(e => e.id === cid) ? t('canvas.lib.update') : t('canvas.lib.publish'), onSelect: () => {
                     const entry = libraryEntryFrom(json, cid);
                     if (entry) yMeta.set('componentLibrary', publishToLibrary(library, entry));
@@ -3836,6 +4185,10 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
                   const vars2 = inst ? variantsOf(json, inst.cinst) : [];
                   if (inst && vars2.length > 1) out.push({ label: t('canvas.cmp.variant'), submenu: () => vars2.map(v => ({ label: v.variant, checked: v.id === inst.cinst ? true : undefined,
                     onSelect: () => onChange(j => syncInstances(switchVariant(j, inst.grp, v.id, (p) => (p === 'n' ? canvasNodeId() : canvasAnnoId())))) })) });
+                  // Cambiar la instancia por otro componente (instance swap): se queda en su sitio con sus textos.
+                  const others = inst ? listComponents(json).filter(c => c.id !== inst.cinst && !vars2.some(v => v.id === c.id)) : [];
+                  if (inst && others.length) out.push({ label: t('canvas.cmp.swap'), submenu: () => others.map(c => ({ label: c.name,
+                    onSelect: () => onChange(j => syncInstances(switchVariant(j, inst.grp, c.id, (p) => (p === 'n' ? canvasNodeId() : canvasAnnoId())), library)) })) });
                 }
                 return out;
               })(),
@@ -3848,6 +4201,20 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
                   nodes: (j.nodes || []).map(x => (selected.has(x.id) && x.link) ? (({ link, ...r }) => r)(x) : x),
                   annotations: (j.annotations || []).map(x => (selAnno.has(x.id) && x.link) ? (({ link, ...r }) => r)(x) : x) })) },
               ] }] : []),
+              ...(pageList.length > 1 ? [{ label: t('canvas.page.moveTo'), submenu: () => pageList.filter(p => p.id !== curPage).map(p => ({ label: p.name, onSelect: () => { onChangeRaw(j => moveToPage(j, { nodes: [...selected], annos: [...selAnno] }, p.id)); setSelected(new Set()); setSelAnno(new Set()); } })) }] : []),
+              ...(!n && selAnno.size >= 1 && [...selAnno].some(id => { const x = (json.annotations || []).find(y => y.id === id); return x && outlineStroke(x); }) ? [{ label: t('canvas.sel.outline'), onSelect: () => onChange(j => {
+                // Contorno del trazo: el borde pasa a ser una figura rellena; la pieza original se queda solo con su relleno.
+                const added = [], keep = [];
+                for (const x of j.annotations || []) {
+                  if (!selAnno.has(x.id)) { keep.push(x); continue; }
+                  const o = outlineStroke(x);
+                  if (!o) { keep.push(x); continue; }
+                  const hasFill = (x.fill && x.fill !== 'none') || x.gradient || (x.imageFill && x.imageFill.src);
+                  if (hasFill && x.kind === 'shape' && x.shape !== 'line' && x.shape !== 'arrow') keep.push({ ...x, color: 'none' });
+                  added.push({ ...o, id: canvasAnnoId(), grp: x.grp, z: (x.z != null ? x.z : 0) + 0.001 });
+                }
+                return { ...j, annotations: [...keep, ...added] };
+              }) }] : []),
               ...(n + selAnno.size === 1 ? [{ label: t('canvas.sel.copyCss'), onSelect: () => {
                 const el = n ? (json.nodes || []).find(x => selected.has(x.id)) : (json.annotations || []).find(x => selAnno.has(x.id));
                 try { navigator.clipboard.writeText(itemCssText(el)); } catch {}
@@ -3921,6 +4288,63 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
             )}
           </div>
         )}
+        {verOpen && (
+          <div className="canvas-ver" onMouseDown={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()} onWheel={(e) => e.stopPropagation()}>
+            <div className="canvas-ver-h">
+              <b>{t('canvas.ver.title')}</b>
+              <button type="button" className="cvp-x" title={t('btn.close')} onClick={() => { leaveVersion(); setVerOpen(false); }}>×</button>
+            </div>
+            <button type="button" className="cvp-add" onClick={() => {
+              const nm = window.prompt(t('canvas.ver.name'), '');
+              if (nm == null) return;
+              saveCanvasVersion(activeNoteId, { name: nm, author: myIdentity || null, data: jsonProp });
+            }}>+ {t('canvas.ver.save')}</button>
+            {verView && (
+              <div className="canvas-ver-viewing">
+                {t('canvas.ver.viewing', { name: verView.name })}
+                <div className="cvp-modes">
+                  <button type="button" className="cvp-chip on" onClick={() => restoreVersion(verView.id)}>{t('canvas.ver.restore')}</button>
+                  <button type="button" className="cvp-chip" onClick={leaveVersion}>{t('canvas.ver.back')}</button>
+                </div>
+              </div>
+            )}
+            <ul className="canvas-ver-list">
+              {verList.length === 0 && <li className="cvp-empty">{t('canvas.ver.empty')}</li>}
+              {verList.map(v => (
+                <li key={v.id} className={verView && verView.id === v.id ? 'on' : ''}>
+                  <button type="button" className="canvas-ver-item" onClick={() => viewVersion(v)}>
+                    <span className="canvas-ver-name">{v.name}</span>
+                    <span className="canvas-ver-meta">{new Date(v.ts).toLocaleString()}{v.author ? ' · ' + v.author : ''}</span>
+                  </button>
+                  <button type="button" className="cvp-x" title={t('cvp.remove')} onClick={() => { if (verView && verView.id === v.id) leaveVersion(); deleteCanvasVersion(activeNoteId, v.id); }}>×</button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {respPrev && (() => {
+          // Vista previa adaptable: el marco cambia de ancho en vivo (restricciones y auto layout), sin guardar.
+          const setW = (w) => {
+            const W = Math.max(120, Math.round(w));
+            setRespPrev(r => ({ ...r, w: W }));
+            const r0 = respPrev.rect;
+            previewChange(j => applyAutoLayout(applyConstraints({ ...j, groups: (j.groups || []).map(g => (g.id === respPrev.id ? { ...g, w: W } : g)) }, respPrev.id, r0, { ...r0, w: W })));
+          };
+          const close = () => { if (draftRafRef.current) { cancelAnimationFrame(draftRafRef.current); draftRafRef.current = 0; } draftRef.current = null; setDraft(null); setRespPrev(null); };
+          return (
+            <div className="canvas-resp" onMouseDown={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
+              <span className="canvas-resp-t">{t('canvas.resp.title')}</span>
+              {[['375', t('canvas.resp.mobile')], ['768', t('canvas.resp.tablet')], ['1280', t('canvas.resp.desktop')]].map(([w, l]) => (
+                <button key={w} type="button" className={`cvp-chip${respPrev.w === Number(w) ? ' on' : ''}`} onClick={() => setW(Number(w))}>{l}</button>
+              ))}
+              <input type="range" min="240" max="1600" step="1" value={respPrev.w} onChange={(e) => setW(Number(e.target.value))} />
+              <span className="canvas-resp-w">{respPrev.w}px</span>
+              <button type="button" className="cvp-chip" onClick={() => setW(respPrev.rect.w)}>{t('canvas.resp.reset')}</button>
+              <button type="button" className="cvp-chip on" onClick={() => { commitPreview(); setRespPrev(null); }}>{t('canvas.resp.apply')}</button>
+              <button type="button" className="cvp-x" title={t('btn.close')} onClick={close}>×</button>
+            </div>
+          );
+        })()}
         {find && (
           <div className="canvas-find edinot-search" role="search" onMouseDown={(e) => e.stopPropagation()}>
             <div className="es-row es-row-find">
@@ -3946,10 +4370,25 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
                   <svg viewBox="0 0 16 16" width="12" height="12"><path d="M4 6l4 4 4-4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" fill="none" /></svg>
                 </button>
               </div>
+              <button type="button" className={`es-icon-btn${find.rep ? ' on' : ''}`} title={t('canvas.find.replace')} aria-label={t('canvas.find.replace')} onClick={() => setFind(f => ({ ...f, rep: !f.rep }))}>⇄</button>
               <button type="button" className="es-icon-btn es-close" title={t('search.closeHint')} aria-label={t('btn.close')} onClick={() => { setFind(null); focusCanvas(); }}>
                 <svg viewBox="0 0 16 16" width="12" height="12"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>
               </button>
             </div>
+            {find.rep && (
+              <div className="es-row es-row-find">
+                <input type="text" className="es-find" value={find.r || ''} placeholder={t('canvas.find.with')} spellCheck={false}
+                  onChange={(e) => { const v = e.target.value; setFind(f => ({ ...f, r: v })); }}
+                  onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Escape') { e.preventDefault(); setFind(null); focusCanvas(); } }} />
+                <button type="button" className="es-btn" disabled={!findHits.length} onClick={() => {
+                  const h = findHits[find.i || 0];
+                  if (!h || h.kind === 'page') return;
+                  const key = (h.kind === 'node' ? 'n:' : h.kind === 'anno' ? 'a:' : 'g:') + h.id;
+                  onChange(j => replaceText(j, find.q, find.r || '', { only: new Set([key]) }).json);
+                }}>{t('canvas.find.one')}</button>
+                <button type="button" className="es-btn" disabled={!findHits.length} onClick={() => onChange(j => replaceText(j, find.q, find.r || '').json)}>{t('canvas.find.all')}</button>
+              </div>
+            )}
           </div>
         )}
         <div className="canvas-world" ref={worldRef}
@@ -3982,15 +4421,21 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
               pointerEvents: 'none', zIndex: 50, borderRadius: 2,
             }} />
           )}
-          {!slideshow && (json.groups || []).filter(g => g.grid && g.grid.columns > 0).map(g => {
-            // Rejilla de columnas del marco (como las «layout grids» de Figma): solo al editar.
+          {!slideshow && (json.groups || []).flatMap(g => frameGrids(g).map((q, qi) => {
+            // Rejillas de guía del marco: solo al editar.
             const gx = g.x || 0, gy = (g.y || 0) + 26, gw = g.w || CANVAS_GROUP_DEFAULT_W, gh = (g.h || CANVAS_GROUP_DEFAULT_H) - 26;
-            const { columns, gutter = 16, margin = 16 } = g.grid;
-            const cw = (gw - margin * 2 - gutter * (columns - 1)) / columns;
-            return Array.from({ length: columns }, (_, i) => (
-              <div key={g.id + 'col' + i} style={{ position: 'absolute', left: gx + margin + i * (cw + gutter), top: gy, width: Math.max(1, cw), height: gh, background: 'rgba(224, 69, 123, 0.08)', pointerEvents: 'none', zIndex: 2 }} />
+            const tint = 'rgba(224, 69, 123, 0.08)';
+            if (q.type === 'grid') {
+              const sz = Math.max(2, q.size || 8);
+              return <div key={g.id + 'sq' + qi} style={{ position: 'absolute', left: gx, top: gy, width: gw, height: gh, pointerEvents: 'none', zIndex: 2,
+                backgroundImage: `linear-gradient(to right, rgba(224,69,123,.18) 1px, transparent 1px), linear-gradient(to bottom, rgba(224,69,123,.18) 1px, transparent 1px)`, backgroundSize: `${sz}px ${sz}px` }} />;
+            }
+            return gridBands(q, q.type === 'rows' ? gh : gw).map((b, bi) => (
+              <div key={g.id + q.type + qi + '-' + bi} style={q.type === 'rows'
+                ? { position: 'absolute', left: gx, top: gy + b.start, width: gw, height: b.size, background: tint, pointerEvents: 'none', zIndex: 2 }
+                : { position: 'absolute', left: gx + b.start, top: gy, width: b.size, height: gh, background: tint, pointerEvents: 'none', zIndex: 2 }} />
             ));
-          })}
+          }))}
           {!slideshow && ['v', 'h'].flatMap(axis => (((json.vars && json.vars.guides) || {})[axis] || []).map((pos, i) => (
             guideDrag && guideDrag.axis === axis && guideDrag.index === i ? null : (
               <div key={'guide' + axis + i} className={`cv-guide cv-guide-${axis}`} onPointerDown={(e) => startGuideDrag(e, axis, i)}
@@ -4016,7 +4461,7 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
           {guides && guides.h.map((y, i) => (
             <div key={'gh' + i} style={{ position: 'absolute', top: y, left: -10000, height: 1, width: 20000, background: '#e0457b', pointerEvents: 'none', zIndex: 55 }} />
           ))}
-          {guides && guides.gaps && guides.gaps.filter(g => g.label != null).map((g, i) => {
+          {(measure || (guides && guides.gaps)) && [...((guides && guides.gaps) || []), ...(measure || [])].filter(g => g.label != null).map((g, i) => {
             // Distancia en píxeles del mundo, en una pastilla (tamaño fijo en pantalla), como en Figma.
             const z = viewport.zoom || 1;
             return (
@@ -4024,7 +4469,7 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
                 background: '#e0457b', color: '#fff', font: '600 11px/1 Inter, system-ui, sans-serif', padding: '3px 5px', borderRadius: 4, whiteSpace: 'nowrap' }}>{g.label}</div>
             );
           })}
-          {guides && guides.gaps && guides.gaps.map((g, i) => {
+          {(measure || (guides && guides.gaps)) && [...((guides && guides.gaps) || []), ...(measure || [])].map((g, i) => {
             const horiz = g.y1 === g.y2, z = viewport.zoom || 1, tick = 8 / z, lw = 1.5 / z;
             return horiz ? (
               <div key={'gg' + i} style={{ position: 'absolute', left: g.x1, top: g.y1 - tick / 2, width: g.x2 - g.x1, height: tick, pointerEvents: 'none', zIndex: 56,
@@ -4177,7 +4622,7 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
                 </svg>
               );
             };
-            for (const n of list) { if (hasZ) flushAnnos(nodeZ(n, nIdx.get(n.id))); if (n.kind === 'page') { out.push(
+            for (const n of list) { if (n.bind && resolveVars(n, json.vars).hidden) continue; if (hasZ) flushAnnos(nodeZ(n, nIdx.get(n.id))); if (n.kind === 'page') { out.push(
             <CanvasPageTile key={n.id} node={n} title={pageTitle} renderPage={renderPage}
               isSelected={selected.has(n.id)} onMouseDown={sStartNodeDrag} onExpand={expandPageNode} />
             ); continue; } out.push(

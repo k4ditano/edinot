@@ -42,7 +42,7 @@ export function pathRings(d) {
 }
 
 /** Contorno (path d, local) de un dibujo cerrado, o null. */
-function outlineD(a) {
+export function outlineD(a) {
   if (a.kind === 'path' && a.d) return a.d;
   if (a.kind !== 'shape' || a.w == null || a.shape === 'line' || a.shape === 'arrow') return null;
   if (a.shape === 'rect') return cornersRectD(a.x, a.y, a.w, a.h, Array.isArray(a.corners) ? a.corners : (a.rx != null ? a.rx : Math.min(8, Math.min(a.w, a.h) * 0.12)));

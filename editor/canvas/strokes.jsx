@@ -1,3 +1,4 @@
+import { dashArray } from './outline.js';
 // Herramientas de dibujo: trazos, flechas, rellenos y rejilla.
 
 import { useI18n, t, getLang } from '../../i18n.js';
@@ -60,7 +61,7 @@ export function canvasFillFromHex(hex, alpha = 0.18) {
 }
 // Dash presets shared by edges and annotations.
 export function canvasDashArray(style) {
-  return style === 'dashed' ? '8 4' : style === 'dotted' ? '2 4' : '';
+  return dashArray(style);
 }
 export const CANVAS_PEN_COLORS = ['#1f2937', '#ef4444', '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ec4899', '#ffffff'];
 // Sticky-note pastel palette. First entry is the default; the sel-bar swaps

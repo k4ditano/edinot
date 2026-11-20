@@ -1,7 +1,7 @@
 // «Copiar como CSS» (como el panel Inspect de Figma): el estilo de un elemento del canvas en CSS listo para pegar.
 // Lógica pura: la usan la app (menú de la selección) y el MCP (canvas_item_css).
 
-import { fontStack, weightOf } from './text-style.js';
+import { fontStack, weightOf, clampLines } from './text-style.js';
 
 const px = (n) => `${Math.round(Number(n) * 100) / 100}px`;
 const rgbaOf = (color, opacity) => {
@@ -21,7 +21,7 @@ export function gradientCss(g) {
   return `linear-gradient(${deg}deg, ${stops})`;
 }
 
-const shadowCss = (s, inset) => `${inset ? 'inset ' : ''}${px(s.dx || 0)} ${px(s.dy ?? (inset ? 2 : 4))} ${px((s.blur ?? (inset ? 4 : 6)) * 2)} ${rgbaOf(s.color || '#000000', s.opacity ?? 0.25)}`;
+const shadowCss = (s, inset) => `${inset ? 'inset ' : ''}${px(s.dx || 0)} ${px(s.dy ?? (inset ? 2 : 4))} ${px((s.blur ?? (inset ? 4 : 6)) * 2)}${s.spread ? ' ' + px(s.spread) : ''} ${rgbaOf(s.color || '#000000', s.opacity ?? 0.25)}`;
 
 /** Declaraciones CSS de un elemento (ficha o dibujo). Devuelve un objeto { propiedad: valor } en orden. */
 export function itemCss(el) {
@@ -43,6 +43,10 @@ export function itemCss(el) {
     const deco = [el.underline && 'underline', el.strike && 'line-through'].filter(Boolean).join(' ');
     if (deco) out['text-decoration'] = deco;
     if (!el.wrap) out['white-space'] = 'pre';
+    if (el.textSize === 'auto') { out.width = 'max-content'; out['white-space'] = 'pre'; }
+    if (el.textSize === 'fixed' && el.h) { out.height = px(el.h); out.overflow = 'hidden'; }
+    const lines = clampLines(el);
+    if (lines) { out.display = '-webkit-box'; out['-webkit-line-clamp'] = String(lines); out['-webkit-box-orient'] = 'vertical'; out.overflow = 'hidden'; out['white-space'] = 'pre-wrap'; }
     return out;
   }
   const isShapeAnno = el.kind === 'shape' && el.w != null;
@@ -64,7 +68,19 @@ export function itemCss(el) {
   if (el.shape === 'ellipse') out['border-radius'] = '50%';
   else if (Array.isArray(el.corners)) out['border-radius'] = el.corners.map(px).join(' ');
   else if (el.shape === 'rect') out['border-radius'] = px(el.rx != null ? el.rx : 6);
-  const shadows = [el.shadow && shadowCss(el.shadow, false), el.innerShadow && shadowCss(el.innerShadow, true)].filter(Boolean);
+  // Rellenos extra: capas de fondo encima del propio (en CSS, la primera de la lista es la de arriba).
+  if (Array.isArray(el.fills) && el.fills.length) {
+    const layer = (f) => { const g = f.gradient ? gradientCss(f.gradient) : null; if (g) return g; const c = rgbaOf(f.color || '#000000', f.opacity ?? 1); return `linear-gradient(${c}, ${c})`; };
+    const base = out.background ? (out.background.includes('gradient(') ? out.background : `linear-gradient(${out.background}, ${out.background})`) : null;
+    out.background = [...el.fills.slice().reverse().map(layer), base].filter(Boolean).join(', ');
+    const blends = el.fills.slice().reverse().map(f => f.blend || 'normal');
+    if (blends.some(b => b !== 'normal')) out['background-blend-mode'] = [...blends, ...(base ? ['normal'] : [])].join(', ');
+  }
+  const list = [...(Array.isArray(el.shadows) ? el.shadows : []), el.shadow && { ...el.shadow, inner: false }, el.innerShadow && { ...el.innerShadow, inner: true }].filter(Boolean);
+  const shadows = list.map(s => shadowCss(s, !!s.inner));
+  // Bordes extra: anillos interiores.
+  if (Array.isArray(el.strokes)) for (const st of el.strokes) if (st && st.color) shadows.push(`inset 0 0 0 ${px(st.width || 1)} ${rgbaOf(st.color, st.opacity ?? 1)}`);
+  if (el.blend && el.blend !== 'normal') out['mix-blend-mode'] = el.blend;
   if (shadows.length) out['box-shadow'] = shadows.join(', ');
   if (el.blur > 0) out.filter = `blur(${px(el.blur)})`;
   if (el.bgBlur > 0) out['backdrop-filter'] = `blur(${px(el.bgBlur)})`;
