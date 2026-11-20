@@ -8,6 +8,7 @@ import { mergedOrder } from './zorder.js';
 import { FONT_KEYS, FONT_STACKS, weightOf, labelTextStyle } from '../../shared/text-style.js';
 import { resolveVars, newVarId, textStyleFrom } from '../../shared/canvas-vars.js';
 import { listComponents, insertInstance } from './components.js';
+import { ENTER_TYPES, HOVER_TYPES, LOOP_TYPES, LINK_ANIMS, playEnter } from './motion.js';
 
 const r1 = (n) => (Number.isFinite(n) ? Math.round(n * 10) / 10 : '');
 
@@ -101,7 +102,56 @@ function TextProps({ n, patch }) {
         ))}
         <span className="cvp-segsep" />
         <button type="button" className={n.wrap ? 'on wide' : 'wide'} title={t('cvp.wrap.h')} onClick={() => patch({ wrap: n.wrap ? undefined : true, noWrap: n.wrap ? true : undefined })}>{t('cvp.wrap')}</button>
+        <button type="button" className={n.rich ? 'on wide' : 'wide'} title={t('cvp.rich.h')} onClick={() => patch({ rich: n.rich ? undefined : true })}>{t('cvp.rich')}</button>
       </div>
+    </>
+  );
+}
+
+// Animación (entrada, al pasar el ratón, bucle) y transición del enlace del prototipo.
+function AnimProps({ item, kind, patch }) {
+  const an = item.anim || {};
+  const set = (k, v) => patch(x => { const a = { ...(x.anim || {}) }; if (v == null || v === '') delete a[k]; else a[k] = v; const r = { ...x }; if (Object.keys(a).length) r.anim = a; else delete r.anim; return r; });
+  const preview = () => {
+    const el = document.querySelector(kind === 'n' ? `[data-node-id="${item.id}"]` : `[data-annotation-id="${item.id}"]`);
+    if (an.enter) playEnter(el, an);
+  };
+  const Sel = ({ label, k, opts, prefix }) => (
+    <label className="cvp-row"><span>{label}</span>
+      <select value={an[k] || ''} onChange={(e) => set(k, e.target.value || null)}>
+        <option value="">—</option>
+        {opts.map(o => <option key={o} value={o}>{t(prefix + o)}</option>)}
+      </select>
+    </label>
+  );
+  return (
+    <>
+      <div className="cvp-h">{t('cvp.anim')}</div>
+      <Sel label={t('cvp.anim.enter')} k="enter" opts={ENTER_TYPES} prefix="cvp.anim.e." />
+      {an.enter && (
+        <div className="cvp-grid">
+          <Num label="ms" value={an.dur || 450} min={60} max={5000} step={50} onChange={(v) => set('dur', v)} />
+          <Num label={t('cvp.anim.delay')} value={an.delay || 0} min={0} max={10000} step={50} onChange={(v) => set('delay', v || null)} />
+        </div>
+      )}
+      <Sel label={t('cvp.anim.hover')} k="hover" opts={HOVER_TYPES} prefix="cvp.anim.h." />
+      <Sel label={t('cvp.anim.loop')} k="loop" opts={LOOP_TYPES} prefix="cvp.anim.l." />
+      {item.link && (
+        <label className="cvp-row"><span>{t('cvp.anim.mode')}</span>
+          <select value={item.linkMode || 'screen'} onChange={(e) => patch(x => { const r = { ...x }; if (e.target.value === 'overlay') r.linkMode = 'overlay'; else delete r.linkMode; return r; })}>
+            <option value="screen">{t('cvp.anim.mode.screen')}</option><option value="overlay">{t('cvp.anim.mode.overlay')}</option>
+          </select>
+        </label>
+      )}
+      {item.link && (
+        <label className="cvp-row"><span>{t('cvp.anim.link')}</span>
+          <select value={item.linkAnim || 'move'} onChange={(e) => patch(x => ({ ...x, linkAnim: e.target.value }))}>
+            {LINK_ANIMS.map(o => <option key={o} value={o}>{t('cvp.anim.t.' + o)}</option>)}
+          </select>
+        </label>
+      )}
+      {an.enter && <button type="button" className="cvp-add" onClick={preview}>▶ {t('cvp.anim.try')}</button>}
+      <p className="cvp-empty">{t('cvp.anim.hint')}</p>
     </>
   );
 }
@@ -121,7 +171,7 @@ const nameOf0 = (it, el) => {
   return txt ? `${k} · ${txt.slice(0, 28)}` : k;
 };
 
-export function CanvasPropsPanel({ json, selected, selAnno, onChange, select, onClose }) {
+export function CanvasPropsPanel({ json, selected, selAnno, onChange, select, onClose, uploadImage, library = [], onInsertLib, onRemoveLib }) {
   useI18n();
   const [tab, setTab] = useState('design');
   const nodes = json.nodes || [], annos = json.annotations || [];
@@ -216,6 +266,25 @@ export function CanvasPropsPanel({ json, selected, selAnno, onChange, select, on
         <Color label={pen ? t('cvp.ink') : t('cvp.stroke')} value={pen ? (a.fill || a.color) : (a.color || '')} allowNone={!pen}
           vars={vars} linked={a.colorVar} onLink={(id) => patchAnno(a.id, linkKey('colorVar', id))}
           onChange={(v) => patchAnno(a.id, x => (pen ? { ...unlink('colorVar')(x), color: v, fill: v } : { ...unlink('colorVar')(x), color: v }))} />
+        {(isBox || (a.kind === 'path' && !a.variant)) && (a.imageFill && a.imageFill.src ? (
+          <div className="cvp-color">
+            <span>{t('cvp.img')}</span>
+            <span className="cvp-imgthumb" style={{ backgroundImage: `url("${a.imageFill.src}")` }} />
+            <select className="cvp-fit" value={a.imageFill.fit || 'cover'} onChange={(e) => patchAnno(a.id, x => ({ ...x, imageFill: { ...x.imageFill, fit: e.target.value } }))}>
+              <option value="cover">{t('cvp.img.cover')}</option><option value="contain">{t('cvp.img.contain')}</option><option value="fill">{t('cvp.img.fill')}</option>
+            </select>
+            <button type="button" className="cvp-x" title={t('cvp.remove')} onClick={() => patchAnno(a.id, x => { const { imageFill, ...r } = x; return r; })}>×</button>
+          </div>
+        ) : uploadImage ? (
+          <label className="cvp-add">+ {t('cvp.img')}
+            <input type="file" accept="image/*" style={{ display: 'none' }} onChange={async (e) => {
+              const file = e.target.files && e.target.files[0]; e.target.value = '';
+              if (!file) return;
+              const src = await uploadImage(file);
+              if (src) patchAnno(a.id, x => ({ ...x, imageFill: { src, fit: 'cover' } }));
+            }} />
+          </label>
+        ) : null)}
         {(isBox || (a.kind === 'path' && !a.variant)) && (a.gradient ? (
           <div className="cvp-color">
             <span>{t('cvp.gradient')}</span>
@@ -287,6 +356,14 @@ export function CanvasPropsPanel({ json, selected, selAnno, onChange, select, on
     );
   }
 
+  if (selN.length + selA.length === 1) {
+    const one = selN[0] || selA[0], kind = selN[0] ? 'n' : 'a';
+    const raw = kind === 'n' ? nodes.find(x => x.id === one.id) : annos.find(x => x.id === one.id);
+    const patchOne = (fn) => (kind === 'n'
+      ? onChange(j => ({ ...j, nodes: (j.nodes || []).map(x => x.id === one.id ? fn(x) : x) }))
+      : patchAnno(one.id, fn));
+    design = <>{design}<AnimProps item={raw || one} kind={kind} patch={patchOne} /></>;
+  }
   const order = mergedOrder(json).slice().reverse();
   const byId = new Map([...nodes.map(n => ['n' + n.id, n]), ...annos.map(a => ['a' + a.id, a])]);
   const toggle = (it, key) => {
@@ -326,6 +403,17 @@ export function CanvasPropsPanel({ json, selected, selAnno, onChange, select, on
                 <span className="cvp-tsample">◆</span>
                 <span className="cvp-cname">{c.name}</span>
                 <button type="button" className="cvp-chip" onClick={() => onChange(j => insertInstance(j, c.id, null).json)}>{t('canvas.cmp.insert')}</button>
+              </div>
+            ))}
+          </>)}
+          {library.length > 0 && (<>
+            <div className="cvp-h">{t('canvas.lib.title')}</div>
+            {library.map(e => (
+              <div key={e.id} className="cvp-color">
+                <span className="cvp-tsample">❖</span>
+                <span className="cvp-cname">{e.name}</span>
+                <button type="button" className="cvp-chip" onClick={() => onInsertLib && onInsertLib(e)}>{t('canvas.cmp.insert')}</button>
+                <button type="button" className="cvp-x" title={t('cvp.remove')} onClick={() => onRemoveLib && onRemoveLib(e.id)}>×</button>
               </div>
             ))}
           </>)}

@@ -8,16 +8,19 @@
 // ciclo es seguro porque este módulo sólo se evalúa cuando editor.jsx ya
 // terminó de cargarse.
 
+import { smartPairs, frameItems, playEnter } from './motion.js';
 import { booleanOp, canBoolean } from '../../shared/canvas-boolean.js';
 import { normalizePath, transformPath, pathBbox, arcsToCubics } from '../../shared/svg-import.js';
-import { createComponent, insertInstance, syncInstances, detachInstances } from './components.js';
+import { createComponent, insertInstance, syncInstances, detachInstances, addVariant, switchVariant, variantsOf, libraryEntryFrom, publishToLibrary, insertFromLibrary } from './components.js';
 import { resolveVars } from '../../shared/canvas-vars.js';
 import { applyAutoLayout } from './autolayout.js';
 import { itemCssText } from '../../shared/canvas-css.js';
 import { snapMove, annoBoxes } from './guides.js';
-import { clipFor, applyMask, releaseMask } from '../../shared/canvas-mask.js';
+import { clipFor, applyMask, releaseMask, maskGeometry } from '../../shared/canvas-mask.js';
 import { labelLines, labelSvgAttrs } from '../../shared/text-style.js';
-import { annoFilterSvg, gradientSvg, hasFilter, cornersRectD, sidesD } from '../../shared/canvas-effects.js';
+import { parseRich } from '../../shared/rich-text.js';
+import { frameToHtml } from '../../shared/frame-html.js';
+import { annoFilterSvg, gradientSvg, hasFilter, cornersRectD, sidesD, imageFillSvg, localBox } from '../../shared/canvas-effects.js';
 import { CanvasPropsPanel } from './PropsPanel.jsx';
 import { Menu } from '../../ui/shell/Menu.jsx';
 import { useI18n, t, getLang } from '../../i18n.js';
@@ -155,6 +158,16 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
   const [selAnno, setSelAnno] = useState(() => new Set()); // selected annotation ids
   const [annoTextEdit, setAnnoTextEdit] = useState(null);  // annotation id whose text is being edited
   const [selMenu, setSelMenu] = useState(null);
+  const [rulersOn, setRulersOn] = useState(() => { try { return localStorage.getItem('edinot.canvas.rulers') === '1'; } catch { return false; } });
+  useEffect(() => { try { localStorage.setItem('edinot.canvas.rulers', rulersOn ? '1' : '0'); } catch {} }, [rulersOn]);
+  const [guideDrag, setGuideDrag] = useState(null);         // { axis: 'v'|'h', pos, index? } guía que se está arrastrando
+  const [presScroll, setPresScroll] = useState(0);          // desplazamiento dentro de la pantalla que se presenta
+  const presScrollRef = useRef(0);
+  const [overlay, setOverlay] = useState(null);             // { src, w, h }: pantalla abierta como superposición
+  const [followAgent, setFollowAgent] = useState(() => { try { return localStorage.getItem('edinot.followAgent') === '1'; } catch { return false; } });
+  useEffect(() => { const f = () => { try { setFollowAgent(localStorage.getItem('edinot.followAgent') === '1'); } catch {} }; window.addEventListener('edinot:follow-changed', f); return () => window.removeEventListener('edinot:follow-changed', f); }, []);
+  const [followChip, setFollowChip] = useState(null);       // { agent, at }: «Siguiendo a Claude» mientras dibuja
+  useEffect(() => { if (!followChip) return; const tm = setTimeout(() => setFollowChip(null), 6000); return () => clearTimeout(tm); }, [followChip]);
   const [vecEdit, setVecEdit] = useState(null);             // id del trazo vectorial cuyos puntos se editan
   useEffect(() => { if (vecEdit && !selAnno.has(vecEdit)) setVecEdit(null); }, [selAnno]);
   const [layoutMenu, setLayoutMenu] = useState(null);       // menú de auto layout de un marco { id, anchor }
@@ -182,7 +195,7 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
     if (!laserRafRef.current) laserRafRef.current = requestAnimationFrame(laserPrune);
   }, [laserPrune]);
   useEffect(() => () => { if (laserRafRef.current) cancelAnimationFrame(laserRafRef.current); }, []);
-  const isDrawTool = CANVAS_DRAW_TOOLS.has(tool) || tool === 'fill' || tool === 'picker';
+  const isDrawTool = CANVAS_DRAW_TOOLS.has(tool) || tool === 'fill' || tool === 'picker' || tool === 'vpen';
   const drawStyleRef = useRef(drawStyle);
   useEffect(() => { drawStyleRef.current = drawStyle; }, [drawStyle]);
   const toolRef = useRef(tool);
@@ -533,7 +546,7 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
     ];
     const b0 = boxes.length ? (() => { const x0 = Math.min(...boxes.map(b => b.x)), y0 = Math.min(...boxes.map(b => b.y)); return { x: x0, y: y0, w: Math.max(...boxes.map(b => b.x + b.w)) - x0, h: Math.max(...boxes.map(b => b.y + b.h)) - y0 }; })() : null;
     const others = b0 ? [...(json.nodes || []).filter(n => !n.hidden && !nOrig.has(n.id)).map(canvasNodeRect), ...annoBoxes(json.annotations, new Set(aOrig.keys()))]
-      .filter(o => Math.abs(o.x - b0.x) < 1600 && Math.abs(o.y - b0.y) < 1600) : [];
+      .filter(o => Math.abs(o.x - b0.x) < 1600 && Math.abs(o.y - b0.y) < 1600).concat(guideBoxes(json)) : [];
     const SNAP = 6 / (viewportRef.current.zoom || 1);
     const onMove = (ev) => {
       if (ev.buttons === 0) { onUp(); return; }
@@ -621,7 +634,7 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
     const stroke = a.color || '#1f2937';
     const sw = a.strokeWidth || 2;
     const op = a.opacity != null ? a.opacity : 1;
-    const fill = a.gradient ? `url(#cvg-${a.id})` : (a.fill && a.fill !== 'none' ? a.fill : 'none');
+    const fill = (a.imageFill && a.imageFill.src) ? 'none' : a.gradient ? `url(#cvg-${a.id})` : (a.fill && a.fill !== 'none' ? a.fill : 'none');
     const dash = canvasDashArray(a.dash) || undefined;
     const common = { stroke, strokeWidth: sw, fill, opacity: op, strokeLinejoin: 'round', strokeDasharray: dash };
     if (a.sketch) {
@@ -682,12 +695,74 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
   const CANVAS_CLOSED_SHAPES = CANVAS_CLOSED_SHAPE_SET;
   // Auto layout: al confirmarse un cambio, los marcos con `layout` recolocan a sus hijos (función pura y estable).
   // Y las instancias de componentes se rehacen desde su principal.
+  // Biblioteca compartida de componentes (datos comunes del espacio de trabajo, sincronizados).
+  const [library, setLibrary] = useState(() => { const v = yMeta.get('componentLibrary'); return Array.isArray(v) ? v : []; });
+  useEffect(() => {
+    const f = (ev) => { if (ev.keysChanged && ev.keysChanged.has('componentLibrary')) { const v = yMeta.get('componentLibrary'); setLibrary(Array.isArray(v) ? v : []); } };
+    yMeta.observe(f);
+    return () => yMeta.unobserve(f);
+  }, []);
   useEffect(() => {
     if (draftRef.current) return;
-    const fix = (j) => applyAutoLayout(syncInstances(j));
+    const fix = (j) => applyAutoLayout(syncInstances(j, library));
     if (fix(jsonProp) !== jsonProp) onChange(j => fix(j));
-  }, [jsonProp]);
+  }, [jsonProp, library]);
   const annoById = useMemo(() => new Map((json.annotations || []).map(a => [a.id, a])), [json.annotations]);
+  // ── Reglas y guías (como en Figma) ──
+  // Las guías viven con el canvas (json.vars.guides = { v: [x…], h: [y…] }) y atraen al mover, como cualquier borde.
+  const guideBoxes = (j) => {
+    const g = (j.vars && j.vars.guides) || {};
+    return [...(g.v || []).map(x => ({ x, y: -1e6, w: 0, h: 2e6 })), ...(g.h || []).map(y => ({ x: -1e6, y, w: 2e6, h: 0 }))];
+  };
+  const setGuides2 = (fn) => onChange(j => { const vars = { colors: [], texts: [], ...(j.vars || {}) }; const g = fn({ v: [], h: [], ...(vars.guides || {}) }); return { ...j, vars: { ...vars, guides: g } }; });
+  const startGuideDrag = (e, axis, index) => {
+    e.preventDefault(); e.stopPropagation();
+    const rect = containerRef.current.getBoundingClientRect();
+    const onMove = (ev) => {
+      const w = screenToWorld(ev.clientX, ev.clientY);
+      setGuideDrag({ axis, pos: axis === 'v' ? w.x : w.y, index, out: axis === 'v' ? ev.clientX - rect.left < 20 : ev.clientY - rect.top < 20 });
+    };
+    const onUp = (ev) => {
+      window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp);
+      const w = screenToWorld(ev.clientX, ev.clientY);
+      const pos = Math.round(axis === 'v' ? w.x : w.y);
+      const out = axis === 'v' ? ev.clientX - rect.left < 20 : ev.clientY - rect.top < 20;   // soltada sobre la regla: se quita
+      setGuideDrag(null);
+      setGuides2(g => {
+        const list = [...(g[axis] || [])];
+        if (index != null) list.splice(index, 1);
+        if (!out) list.push(pos);
+        return { ...g, [axis]: list };
+      });
+    };
+    window.addEventListener('pointermove', onMove); window.addEventListener('pointerup', onUp);
+    onMove(e);
+  };
+  const renderRulers = () => {
+    if (!rulersOn || slideshow) return null;
+    const rect = containerRef.current && containerRef.current.getBoundingClientRect();
+    if (!rect) return null;
+    const z = viewport.zoom || 1;
+    const nice = [1, 2, 5].flatMap(m => [1, 10, 100, 1000].map(p => m * p)).sort((a, b) => a - b);
+    const step = nice.find(v => v * z >= 70) || 5000;
+    const ticks = (len, off) => {
+      const out = []; const start = Math.floor((-off / z) / step) * step;
+      for (let v = start; v * z + off < len; v += step) out.push(v);
+      return out;
+    };
+    const tx = ticks(rect.width, viewport.x), ty = ticks(rect.height, viewport.y);
+    return (
+      <>
+        <div className="cv-ruler cv-ruler-h" onPointerDown={(e) => startGuideDrag(e, 'h')} title={t('canvas.rulers.drag')}>
+          {tx.map(v => <span key={v} style={{ left: v * z + viewport.x }}>{v}</span>)}
+        </div>
+        <div className="cv-ruler cv-ruler-v" onPointerDown={(e) => startGuideDrag(e, 'v')} title={t('canvas.rulers.drag')}>
+          {ty.map(v => <span key={v} style={{ top: v * z + viewport.y }}>{v}</span>)}
+        </div>
+        <div className="cv-ruler-corner" />
+      </>
+    );
+  };
   // ── Edición de puntos de un trazo vectorial (como el modo «editar» de Figma) ──
   // Anclas (cuadrados) y puntos de control de las curvas (círculos). Arrastrar un ancla arrastra también sus
   // controles. Coordenadas locales del trazo (el <g> ya lleva su desplazamiento).
@@ -764,11 +839,24 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
     if (a.kind === 'path' && pd) {
       if (a.variant === 'pen') body = <path d={pd} fill={a.fill || a.color || '#1f2937'} stroke="none" opacity={a.opacity != null ? a.opacity : 1} />;
       else if (a.variant === 'highlighter') body = <path d={pd} fill="none" stroke={a.color || '#f59e0b'} strokeWidth={a.strokeWidth || 12} strokeLinecap="round" strokeLinejoin="round" opacity={a.opacity != null ? a.opacity : 0.35} style={{ mixBlendMode: 'multiply' }} />;
-      else body = <path d={pd} fill={a.gradient ? `url(#cvg-${a.id})` : (a.fill || 'none')} stroke={a.color || '#ea580c'} strokeWidth={a.strokeWidth || 2.5} strokeLinecap="round" strokeLinejoin="round" opacity={a.opacity != null ? a.opacity : 0.85} strokeDasharray={canvasDashArray(a.dash) || undefined} />;
+      else body = <path d={pd} fill={(a.imageFill && a.imageFill.src) ? 'none' : a.gradient ? `url(#cvg-${a.id})` : (a.fill || 'none')} stroke={a.color || '#ea580c'} strokeWidth={a.strokeWidth || 2.5} strokeLinecap="round" strokeLinejoin="round" opacity={a.opacity != null ? a.opacity : 0.85} strokeDasharray={canvasDashArray(a.dash) || undefined} />;
     } else if (a.kind === 'shape') {
       body = renderAnnoShape(a, interactive);
     } else return null;
     // Degradado y sombra (sobre todo de SVG importados o de agentes): definiciones propias de este dibujo.
+    // Imagen como relleno: en pantalla, una <image> recortada con la forma (un <pattern> no se pinta bien en las
+    // capas SVG del canvas, que se desbordan de su caja); el borde va encima.
+    if (a.imageFill && a.imageFill.src) {
+      const lb = localBox(a), geom = maskGeometry({ ...a, ox: 0, oy: 0, rot: 0 });
+      if (lb && geom) {
+        const par = a.imageFill.fit === 'contain' ? 'xMidYMid meet' : a.imageFill.fit === 'fill' ? 'none' : 'xMidYMid slice';
+        body = <>
+          <clipPath id={`cvic-${a.id}`}><path d={geom.d} /></clipPath>
+          <image href={a.imageFill.src} x={lb.x} y={lb.y} width={lb.w} height={lb.h} preserveAspectRatio={par} clipPath={`url(#cvic-${a.id})`} opacity={a.opacity != null ? a.opacity : 1} />
+          {body}
+        </>;
+      }
+    }
     const paintDefs = (a.gradient || hasFilter(a)) ? annoPaintDefs(a) : null;
     if (hasFilter(a)) body = <g filter={`url(#cvs-${a.id})`}>{body}</g>;
     if (paintDefs) body = <>{paintDefs}{body}</>;
@@ -815,6 +903,7 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
       <g key={a.id}
         className={`canvas-annotation${sel ? ' selected' : ''}`}
         data-annotation-id={a.id}
+        data-hover={(a.anim && a.anim.hover) || undefined} data-loop={(a.anim && a.anim.loop) || undefined}
         transform={`translate(${a.ox || 0} ${a.oy || 0})${shapeRot}`}
         onPointerDown={tool === 'select' && !editing ? (e) => startAnnoDrag(e, a) : undefined}
         onDoubleClick={tool === 'select' && closed ? (e) => { e.stopPropagation(); setSelAnno(new Set([a.id])); setAnnoTextEdit(a.id); } : (tool === 'select' && a.kind === 'path' && !a.variant && a.d) ? (e) => { e.stopPropagation(); setSelAnno(new Set([a.id])); setVecEdit(a.id); } : undefined}
@@ -891,10 +980,67 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
       onChange(j => ({ ...j, nodes: (j.nodes || []).map(n => n.id === nodeHit.id ? (({ fillVar, colorVar, ...r }) => ({ ...r, color }))(n) : n) }));
     }
   };
+  // ── Pluma (como en Figma): clic = punto; clic y arrastrar = punto con curva (tiradores simétricos); clic en el
+  // primer punto = cerrar; Intro, Esc o doble clic = terminar. El resultado es un trazo vectorial editable.
+  const penRef = useRef(null);
+  const penD = (pts, closed) => {
+    if (!pts.length) return '';
+    let d = `M ${pts[0].x} ${pts[0].y}`;
+    const seg = (a, b) => (a.hout || b.hin)
+      ? ` C ${(a.hout || [a.x, a.y]).join(' ')} ${(b.hin || [b.x, b.y]).join(' ')} ${b.x} ${b.y}` : ` L ${b.x} ${b.y}`;
+    for (let i = 1; i < pts.length; i++) d += seg(pts[i - 1], pts[i]);
+    if (closed && pts.length > 2) d += seg(pts[pts.length - 1], pts[0]) + ' Z';
+    return d;
+  };
+  const penPreview = (cursor) => {
+    const st = penRef.current; if (!st) return;
+    const last = st.pts[st.pts.length - 1];
+    const style = drawStyleRef.current;
+    setLivePreview({ kind: 'vpen', pts: st.pts, d: penD(st.pts, false), color: style.color, size: style.size,
+      rubber: cursor && last ? `M ${last.x} ${last.y} L ${cursor.x} ${cursor.y}` : null });
+  };
+  const penFinish = (closed) => {
+    const st = penRef.current; penRef.current = null; setLivePreview(null);
+    if (!st || st.pts.length < 2) return;
+    const style = drawStyleRef.current;
+    const d = penD(st.pts, closed);
+    const cm = normalizePath(d);
+    const bb = pathBbox(cm);
+    const anno = { id: canvasAnnoId(), kind: 'path', d: transformPath(cm, [1, 0, 0, 1, 0, 0]), fill: closed && style.fill ? canvasFillFromHex(style.color, 0.25) : 'none', color: style.color, strokeWidth: style.size, opacity: style.opacity != null ? style.opacity : 1, bbox: bb };
+    onChange(j => ({ ...j, annotations: [...(j.annotations || []), anno] }));
+    setSelAnno(new Set([anno.id]));
+  };
+  const penDown = (e) => {
+    const w = screenToWorld(e.clientX, e.clientY);
+    if (!penRef.current) penRef.current = { pts: [] };
+    const st = penRef.current;
+    const z = viewportRef.current.zoom || 1;
+    if (st.pts.length > 2 && Math.hypot(w.x - st.pts[0].x, w.y - st.pts[0].y) < 8 / z) { penFinish(true); return; }   // cerrar
+    if (e.detail >= 2) { penFinish(false); return; }                                                                // doble clic: terminar
+    const p = { x: w.x, y: w.y, hin: null, hout: null };
+    st.pts.push(p);
+    penPreview(null);
+    const onMove = (ev) => {
+      const m = screenToWorld(ev.clientX, ev.clientY);
+      if (ev.buttons === 0) { penPreview(m); return; }
+      if (Math.hypot(m.x - p.x, m.y - p.y) > 3 / z) { p.hout = [m.x, m.y]; p.hin = [2 * p.x - m.x, 2 * p.y - m.y]; }
+      penPreview(null);
+    };
+    const onUp = () => { window.removeEventListener('pointerup', onUp); penPreview(null); };
+    if (!st.hover) { st.hover = onMove; window.addEventListener('pointermove', onMove); }
+    else { window.removeEventListener('pointermove', st.hover); st.hover = onMove; window.addEventListener('pointermove', onMove); }
+    window.addEventListener('pointerup', onUp);
+  };
+  useEffect(() => {
+    if (tool === 'vpen') return undefined;
+    if (penRef.current) { if (penRef.current.hover) window.removeEventListener('pointermove', penRef.current.hover); penFinish(false); }
+    return undefined;
+  }, [tool]);
   const onCanvasPointerDown = (e) => {
     if (!isDrawTool || e.button !== 0) return;
     // Pen / shapes start from empty canvas; the eraser works anywhere.
     if (tool === 'fill' || tool === 'picker') { e.preventDefault(); e.stopPropagation(); paintAt(e); return; }
+    if (tool === 'vpen') { e.preventDefault(); e.stopPropagation(); focusCanvas(); penDown(e); return; }
     if (tool !== 'eraser') {
       if (e.target !== containerRef.current && !e.target.classList.contains('canvas-world')) return;
     }
@@ -1197,7 +1343,8 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
       const R = 1200;   // sólo los vecinos que puedan quedar a ~6 px tras arrastrar un trecho razonable
       return nodeGridRef.current.query(box0.x - R, box0.y - R, box0.w + 2 * R, box0.h + 2 * R)
         .filter(n => !moveIds.has(n.id) && n.id !== node.id).map(canvasNodeRect)
-        .concat(annoBoxes(json.annotations, annoMoveIds).filter(b => Math.abs(b.x - box0.x) < R + box0.w && Math.abs(b.y - box0.y) < R + box0.h));   // también los dibujos
+        .concat(annoBoxes(json.annotations, annoMoveIds).filter(b => Math.abs(b.x - box0.x) < R + box0.w && Math.abs(b.y - box0.y) < R + box0.h))   // también los dibujos
+        .concat(guideBoxes(json));   // y las guías
     })();
     const SNAP = 6 / (viewportRef.current.zoom || 1);
     const snapAxis = (lines, candidates) => {
@@ -1872,6 +2019,7 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
   }, [renderPage]);
   const onKeyDown = (e) => {
     if (e.key === 'Escape' && vecEdit) { e.preventDefault(); setVecEdit(null); return; }
+    if ((e.key === 'Enter' || e.key === 'Escape') && penRef.current) { e.preventDefault(); if (penRef.current.hover) window.removeEventListener('pointermove', penRef.current.hover); penFinish(false); return; }
     const ae = document.activeElement;
     const typing = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable);
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && (e.key === 'f' || e.key === 'F') && !typing) {
@@ -1984,7 +2132,7 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
       }
       if (e.key === 'f') { e.preventDefault(); addFrameQuick(); return; }
       if (e.key === '?') { e.preventDefault(); setShortcutsOpen(o => !o); return; }
-      const map = { v: 'select', 1: 'select', p: 'pen', b: 'pen', h: 'highlighter', e: 'eraser', t: 'text', r: 'rect', o: 'ellipse', d: 'diamond', l: 'line', a: 'arrow', k: 'laser', g: 'fill', i: 'picker' };
+      const map = { v: 'select', 1: 'select', p: 'pen', b: 'pen', h: 'highlighter', e: 'eraser', t: 'text', r: 'rect', o: 'ellipse', d: 'diamond', l: 'line', a: 'arrow', k: 'laser', g: 'fill', i: 'picker', u: 'vpen' };
       const next = map[e.key.toLowerCase()];
       if (next) { e.preventDefault(); setTool(next); return; }
       if (e.key === 'Escape' && tool !== 'select') { e.preventDefault(); setTool('select'); return; }
@@ -2605,7 +2753,9 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
         const anchor = al === 'center' ? 'middle' : al === 'right' ? 'end' : 'start';
         const base = (n.y || 0) + padY + (lh * fs - 1.21 * fs) / 2 + 0.97 * fs;
         const at = Object.entries(labelSvgAttrs(n)).map(([k, v]) => `${k}="${esc(v)}"`).join(' ');
-        parts.push(`<text x="${tx}" y="${base}" text-anchor="${anchor}" fill="${esc(n.color || '#2a2f23')}" ${at}>${lines.map((ln, i) => `<tspan x="${tx}"${i ? ` dy="${lh * fs}"` : ''}>${esc(ln) || ' '}</tspan>`).join('')}</text>`);
+        const runSvg = (r) => `<tspan${r.b ? ' font-weight="700"' : ''}${r.i ? ' font-style="italic"' : ''}${(r.u || r.s) ? ` text-decoration="${[r.u && 'underline', r.s && 'line-through'].filter(Boolean).join(' ')}"` : ''}${r.color ? ` fill="${esc(r.color)}"` : ''}${r.size ? ` font-size="${r.size}"` : ''}${r.code ? ` font-family="'JetBrains Mono', monospace"` : ''}>${esc(r.t)}</tspan>`;
+        const rich = n.rich ? parseRich(lines.join('\n')) : null;
+        parts.push(`<text x="${tx}" y="${base}" text-anchor="${anchor}" fill="${esc(n.color || '#2a2f23')}" ${at}>${lines.map((ln, i) => `<tspan x="${tx}"${i ? ` dy="${lh * fs}"` : ''}>${rich ? (rich[i] || []).map(runSvg).join('') || ' ' : (esc(ln) || ' ')}</tspan>`).join('')}</text>`);
         return;
       }
       const isStickyN = (n.kind === 'text' || !n.kind) && n.sticky;
@@ -2632,7 +2782,7 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
     const svg = `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX} ${minY} ${maxX - minX} ${maxY - minY}" width="${maxX - minX}" height="${maxY - minY}" font-family="sans-serif"><rect x="${minX}" y="${minY}" width="${maxX - minX}" height="${maxY - minY}" fill="#f7f5ee"/>${parts.join('\n')}</svg>`;
     return { svg, w: maxX - minX, h: maxY - minY };
   };
-  if (typeof window !== 'undefined' && window.__EDINOT_TEST) window.__edinotCanvasSvg = () => buildCanvasSvg(null, false);   // solo pruebas
+  if (typeof window !== 'undefined' && window.__EDINOT_TEST) { window.__edinotCanvasSvg = () => buildCanvasSvg(null, false); window.__edinotFrameHtml = (title) => { const g = (json.groups || []).find(x => x.title === title); return g ? frameToHtml(json, g) : null; }; }   // solo pruebas
   const exportCanvasSvg = async () => {
     const r = buildCanvasSvg(await inlineExportImages(), false);
     if (!r) { window.alert(t('canvas.exportEmpty')); return; }
@@ -2653,6 +2803,10 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
     if (a.gradient && Array.isArray(a.gradient.stops) && a.gradient.stops.length) {
       defs.push(gradientSvg(a, `eg-${a.id}`, esc));
       a2 = { ...a, fill: `url(#eg-${a.id})` };
+    }
+    if (a.imageFill && a.imageFill.src) {
+      const pat = imageFillSvg(a, `ei-${a.id}`, esc);
+      if (pat) { defs.push(pat); a2 = { ...a2, fill: `url(#ei-${a.id})` }; }
     }
     let body = annoToSvgBody(a2, esc);
     if (!body) return '';
@@ -2853,17 +3007,51 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
   useEffect(() => { endSlideshowRef.current = endSlideshow; }, [endSlideshow]);
 
   const goToSlideRef = useRef(null);
-  const goToSlide = useCallback((idx) => {
+  const goToSlide = useCallback((idx, how = 'move') => {
     const ss = slideshowRef.current;
     if (!ss) return;
     if (idx < 0) idx = 0;
     if (idx >= ss.slides.length) { endSlideshow(); return; }
     if (slideTimerRef.current) { clearTimeout(slideTimerRef.current); slideTimerRef.current = null; }
     const slide = ss.slides[idx];
-    const g = (jsonGroupsRef.current || []).find(x => x.id === slide.groupId);
+    const groups = jsonGroupsRef.current || [];
+    const g = groups.find(x => x.id === slide.groupId);
+    const prevG = ss.slides[ss.idx] && ss.idx !== idx ? groups.find(x => x.id === ss.slides[ss.idx].groupId) : null;
+    presScrollRef.current = 0; setPresScroll(0); setOverlay(null);
+    let settle = 650;
     if (g) {
       const tgt = groupFitTarget(g);
-      if (tgt) animateViewportTo(tgt);
+      const root = containerRef.current;
+      if (tgt) {
+        // Transiciones del prototipo: al instante, fundido, desplazamiento rápido, mover (por defecto) o smart animate.
+        if (how === 'instant') { setViewport(tgt); settle = 0; }
+        else if (how === 'dissolve' && root && root.animate) {
+          settle = 420;
+          const out = root.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 180, fill: 'forwards' });
+          out.onfinish = () => { setViewport(tgt); requestAnimationFrame(() => { out.cancel(); root.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 240 }); }); };
+        } else if (how === 'smart' && prevG && root) {
+          settle = 520;
+          setViewport(tgt);
+          const pairs = smartPairs(jsonRef.current || {}, prevG, g);
+          requestAnimationFrame(() => requestAnimationFrame(() => {
+            for (const pr of pairs) {
+              const el = root.querySelector(pr.kind === 'n' ? `[data-node-id="${pr.id}"]` : `[data-annotation-id="${pr.id}"]`);
+              if (!el || !el.animate) continue;
+              if (pr.matched) el.animate([{ translate: `${pr.dx}px ${pr.dy}px`, scale: String(pr.scale || 1) }, { translate: '0px 0px', scale: '1' }], { duration: 520, easing: 'cubic-bezier(.3,.7,.2,1)' });
+              else el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 360, delay: 120, fill: 'backwards' });
+            }
+          }));
+        } else { settle = how === 'slide' ? 380 : 650; animateViewportTo(tgt, settle); }
+      }
+      // Animaciones de entrada de las piezas de la pantalla, cuando la cámara llega.
+      setTimeout(() => {
+        const root2 = containerRef.current;
+        if (!root2) return;
+        for (const it of frameItems(jsonRef.current || {}, g)) {
+          if (!it.item.anim || !it.item.anim.enter) continue;
+          playEnter(root2.querySelector(it.kind === 'n' ? `[data-node-id="${it.item.id}"]` : `[data-annotation-id="${it.item.id}"]`), it.item.anim);
+        }
+      }, how === 'smart' ? 0 : Math.max(0, settle - 120));
     }
     const next = { ...ss, idx };
     slideshowRef.current = next;
@@ -2905,6 +3093,21 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
   const startSlideshowRef = useRef(startSlideshow);
   useEffect(() => { startSlideshowRef.current = startSlideshow; }, [startSlideshow]);
 
+  // Superposición (modal): la pantalla de destino, dibujada como imagen (con su fondo) encima de la actual.
+  const overlayRef = useRef(null);
+  useEffect(() => { overlayRef.current = overlay; }, [overlay]);
+  const openOverlay = async (frameId) => {
+    const j = jsonRef.current || {};
+    const g = (j.groups || []).find(x => x.id === frameId);
+    if (!g) return;
+    const items = frameItems(j, g);
+    const only = { nodes: new Set(items.filter(i => i.kind === 'n').map(i => i.item.id)), annos: new Set(items.filter(i => i.kind === 'a').map(i => i.item.id)) };
+    const r = buildCanvasSvg(await inlineExportImages(), false, only);
+    if (!r) return;
+    const src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(r.svg);
+    const z = viewportRef.current.zoom || 1;
+    setOverlay({ src, w: r.w * z, h: r.h * z });
+  };
   // Prototipo: presentando, pulsar un elemento con `link` (el id de un marco) lleva a esa pantalla. Vale con
   // pulsar cualquier pieza de su grupo (un botón y su texto).
   useEffect(() => {
@@ -2918,8 +3121,8 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
       if (aEl) item = (j.annotations || []).find(a => a.id === aEl.getAttribute('data-annotation-id'));
       else if (nEl) item = (j.nodes || []).find(n => n.id === nEl.getAttribute('data-node-id'));
       if (!item) return null;
-      if (item.link) return item.link;
-      if (item.grp) { const m = [...(j.nodes || []), ...(j.annotations || [])].find(x => x.grp === item.grp && x.link); if (m) return m.link; }
+      if (item.link) return { link: item.link, anim: item.linkAnim, mode: item.linkMode };
+      if (item.grp) { const m = [...(j.nodes || []), ...(j.annotations || [])].find(x => x.grp === item.grp && x.link); if (m) return { link: m.link, anim: m.linkAnim, mode: m.linkMode }; }
       return null;
     };
     // Lo que hay bajo el puntero, de arriba abajo: un texto encima de un botón no tapa el enlace del botón.
@@ -2937,8 +3140,11 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
       if (!ss) return;
       // Presentando, los clics no editan (como el modo prototipo de Figma): solo siguen enlaces.
       e.preventDefault(); e.stopPropagation();
-      const link = linkAt(e);
-      if (!link) return;
+      if (overlayRef.current) { if (!(e.target.closest && e.target.closest('.canvas-overlay-img'))) setOverlay(null); return; }
+      const hit = linkAt(e);
+      if (!hit) return;
+      const link = hit.link;
+      if (hit.mode === 'overlay') { openOverlay(link); return; }
       let idx = ss.slides.findIndex(sl => sl.groupId === link);
       if (idx < 0) {
         // La pantalla de destino no está en la presentación: se añade al final y se va a ella.
@@ -2947,14 +3153,34 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
         const next = { ...ss, slides: [...ss.slides, { groupId: g.id, title: g.title || '', message: '' }] };
         slideshowRef.current = next; setSlideshow(next); idx = next.slides.length - 1;
       }
-      goToSlideRef.current && goToSlideRef.current(idx);
+      goToSlideRef.current && goToSlideRef.current(idx, hit.anim || 'move');
     };
     const onMove = (e) => { root.style.cursor = linkAt(e) ? 'pointer' : ''; };
+    // Pantalla desplazable (marco con `scroll`): la rueda recorre el contenido que sigue por debajo del marco.
+    const onWheel = (e) => {
+      const ss = slideshowRef.current; if (!ss) return;
+      const g = (jsonGroupsRef.current || []).find(x => x.id === (ss.slides[ss.idx] || {}).groupId);
+      if (!g || !g.scroll) return;
+      e.preventDefault(); e.stopPropagation();
+      const j = jsonRef.current || {};
+      const gx = g.x || 0, gw = g.w || CANVAS_GROUP_DEFAULT_W, gy = g.y || 0, gh = g.h || CANVAS_GROUP_DEFAULT_H;
+      let bottom = gy + gh;
+      for (const n of j.nodes || []) { const r = canvasNodeRect(n); const cx = r.x + r.w / 2; if (cx >= gx && cx <= gx + gw && r.y >= gy) bottom = Math.max(bottom, r.y + r.h); }
+      for (const a of j.annotations || []) { if (!a.bbox) continue; const x = a.bbox.x + (a.ox || 0), y = a.bbox.y + (a.oy || 0); const cx = x + a.bbox.w / 2; if (cx >= gx && cx <= gx + gw && y >= gy) bottom = Math.max(bottom, y + a.bbox.h); }
+      const max = Math.max(0, bottom - (gy + gh) + 24);
+      const z = viewportRef.current.zoom || 1;
+      const next = Math.max(0, Math.min(max, presScrollRef.current + e.deltaY / z));
+      const d = next - presScrollRef.current;
+      if (!d) return;
+      presScrollRef.current = next; setPresScroll(next);
+      setViewport(v => ({ ...v, y: v.y - d * z }));
+    };
+    root.addEventListener('wheel', onWheel, { capture: true, passive: false });
     root.addEventListener('pointerdown', onDown, true);
     root.addEventListener('mousedown', (e) => { if (!(e.target.closest && e.target.closest('.canvas-present-bar'))) { e.stopPropagation(); } }, true);
     setSelected(new Set()); setSelAnno(new Set());
     root.addEventListener('pointermove', onMove, true);
-    return () => { root.removeEventListener('pointerdown', onDown, true); root.removeEventListener('pointermove', onMove, true); root.style.cursor = ''; };
+    return () => { root.removeEventListener('pointerdown', onDown, true); root.removeEventListener('pointermove', onMove, true); root.removeEventListener('wheel', onWheel, { capture: true }); root.style.cursor = ''; };
   }, [!!slideshow]);
 
   // Keyboard navigation while presenting (capture phase so the canvas's own
@@ -3006,6 +3232,20 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
     };
     const api = {
       noteId: activeNoteId,
+      // «Seguir al agente»: lleva la vista a la zona que el agente acaba de cambiar (sin acercar más de lo que
+      // estaba; solo aleja si no cabe) y muestra quién está trabajando.
+      followTo: (bbox, agent) => {
+        const rect = containerRef.current && containerRef.current.getBoundingClientRect();
+        if (!rect || !bbox) return;
+        const v = viewportRef.current, PAD = 80;
+        const inView = bbox.x * v.zoom + v.x >= PAD / 2 && bbox.y * v.zoom + v.y >= PAD / 2
+          && (bbox.x + bbox.w) * v.zoom + v.x <= rect.width - PAD / 2 && (bbox.y + bbox.h) * v.zoom + v.y <= rect.height - PAD / 2;
+        setFollowChip({ agent, at: Date.now() });
+        if (inView) return;
+        const zoom = Math.max(0.2, Math.min(v.zoom, (rect.width - PAD * 2) / Math.max(1, bbox.w), (rect.height - PAD * 2) / Math.max(1, bbox.h)));
+        const cx = bbox.x + bbox.w / 2, cy = bbox.y + bbox.h / 2;
+        animateViewportTo({ zoom, x: rect.width / 2 - cx * zoom, y: rect.height / 2 - cy * zoom }, 450);
+      },
       focusNode: (nodeId, message) => {
         cancelPresent();
         const node = (jsonNodesRef.current || []).find(n => n.id === nodeId);
@@ -3292,6 +3532,8 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
             toggleFullscreen: () => setFullscreen(f => !f),
             openShortcuts: () => setShortcutsOpen(true),
             toggleProps: () => setPropsOpen(o => !o), propsOpen,
+            rulersOn, toggleRulers: () => setRulersOn(o => !o),
+            followAgent, toggleFollow: () => { const nv = !followAgent; try { localStorage.setItem('edinot.followAgent', nv ? '1' : '0'); } catch {} setFollowAgent(nv); window.dispatchEvent(new Event('edinot:follow-changed')); },
           }} />
           <CanvasZoom zoom={viewport.zoom} onIn={() => zoomBy(1.2)} onOut={() => zoomBy(0.83)} onReset={resetZoom} />
         </>
@@ -3372,6 +3614,19 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
           </div>
         </>
       )}
+      {renderRulers()}
+      {slideshow && overlay && (
+        <div className="canvas-overlay" onMouseDown={(e) => { e.stopPropagation(); if (!(e.target.closest && e.target.closest('.canvas-overlay-img'))) setOverlay(null); }}>
+          <img className="canvas-overlay-img" src={overlay.src} alt="" style={{ width: overlay.w, height: overlay.h }} />
+        </div>
+      )}
+      {followChip && (
+        <div className="canvas-follow-chip" role="status" onMouseDown={(e) => e.stopPropagation()}>
+          <span className="canvas-follow-dot" aria-hidden="true" />
+          {t('canvas.follow.chip', { who: (followChip.agent && (followChip.agent.alias || followChip.agent.kind)) || t('canvas.follow.agent') })}
+          <button type="button" onClick={() => { try { localStorage.setItem('edinot.followAgent', '0'); } catch {} setFollowChip(null); window.dispatchEvent(new Event('edinot:follow-changed')); }}>{t('canvas.follow.stop')}</button>
+        </div>
+      )}
       {layoutMenu && (() => {
         const g = (json.groups || []).find(x => x.id === layoutMenu.id);
         if (!g) return null;
@@ -3393,11 +3648,25 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
             { label: t('canvas.al.align'), submenu: () => ['start', 'center', 'end'].map(v => ({ label: t('canvas.al.align.' + v), checked: chk((L.align || 'start') === v), onSelect: () => set({ align: v }) })) },
             { label: t('canvas.al.hug'), checked: chk(L.hug), onSelect: () => set({ hug: !L.hug }) },
           ] : []),
+          { type: 'sep' },
+          { label: t('canvas.grid.cols'), submenu: () => [0, 2, 4, 6, 8, 12].map(c => ({ label: c ? t('canvas.grid.n', { n: c }) : t('canvas.grid.none'), checked: chk(((g.grid && g.grid.columns) || 0) === c),
+            onSelect: () => onChange(j => ({ ...j, groups: (j.groups || []).map(x => x.id === g.id ? (c ? { ...x, grid: { gutter: 16, margin: 16, ...(x.grid || {}), columns: c } } : (({ grid, ...r }) => r)(x)) : x) })) })) },
+          { label: t('canvas.exportHtml'), onSelect: () => {
+            const html = frameToHtml(json, g);
+            const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+            const aEl = document.createElement('a'); aEl.href = url; aEl.download = `${(g.title || 'pantalla').replace(/[^\w\- áéíóúñÁÉÍÓÚÑ]+/g, '').trim() || 'pantalla'}.html`;
+            document.body.appendChild(aEl); aEl.click(); aEl.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000);
+          } },
+          { label: t('canvas.al.scroll'), checked: chk(g.scroll), onSelect: () => onChange(j => ({ ...j, groups: (j.groups || []).map(x => x.id === g.id ? (x.scroll ? (({ scroll, ...r }) => r)(x) : { ...x, scroll: true }) : x) })) },
         ];
         return <Menu anchor={layoutMenu.anchor} items={items} onClose={() => setLayoutMenu(null)} minWidth={230} label={t('canvas.autolayout')} className="cv-menu" />;
       })()}
       {propsOpen && (
         <CanvasPropsPanel json={json} selected={selected} selAnno={selAnno} onChange={onChange} onClose={() => setPropsOpen(false)}
+          library={library}
+          onInsertLib={(entry) => { const c = canvasCenter(200, 80); const r = insertFromLibrary(json, entry, c, (p) => (p === 'n' ? canvasNodeId() : canvasAnnoId())); if (r.ids) { onChange(() => r.json); setSelected(new Set(r.ids.nodes)); setSelAnno(new Set(r.ids.annos)); } }}
+          onRemoveLib={(id) => yMeta.set('componentLibrary', library.filter(e => e.id !== id))}
+          uploadImage={onUploadAttachment ? async (file) => { const info = await onUploadAttachment(file); return info ? (info.url || (info.sha ? `edinot://blob/${info.sha}` : '')) : ''; } : null}
           select={(it, add) => {
             if (it.type === 'n') { setSelected(s => { const n = new Set(add ? s : []); n.add(it.id); return n; }); if (!add) setSelAnno(new Set()); }
             else { setSelAnno(s => { const n = new Set(add ? s : []); n.add(it.id); return n; }); if (!add) setSelected(new Set()); }
@@ -3553,6 +3822,20 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
                     if (r.ids) { onChange(() => r.json); setSelected(new Set(r.ids.nodes)); setSelAnno(new Set(r.ids.annos)); }
                   } });
                   if (items.some(x => x.cinst)) out.push({ label: t('canvas.cmp.detach'), onSelect: () => onChange(j => detachInstances(j, [...selected], [...selAnno])) });
+                  if (items.some(x => x.cmain)) out.push({ label: library.some(e => e.id === cid) ? t('canvas.lib.update') : t('canvas.lib.publish'), onSelect: () => {
+                    const entry = libraryEntryFrom(json, cid);
+                    if (entry) yMeta.set('componentLibrary', publishToLibrary(library, entry));
+                  } });
+                  if (items.some(x => x.cmain)) out.push({ label: t('canvas.cmp.addVariant'), onSelect: async () => {
+                    const nm = await askPrompt(t('canvas.cmp.variantName'), '');
+                    if (!nm) return;
+                    const r = addVariant(json, cid, nm.trim(), (p) => (p === 'n' ? canvasNodeId() : canvasAnnoId()));
+                    if (r.id) onChange(() => r.json);
+                  } });
+                  const inst = items.find(x => x.cinst);
+                  const vars2 = inst ? variantsOf(json, inst.cinst) : [];
+                  if (inst && vars2.length > 1) out.push({ label: t('canvas.cmp.variant'), submenu: () => vars2.map(v => ({ label: v.variant, checked: v.id === inst.cinst ? true : undefined,
+                    onSelect: () => onChange(j => syncInstances(switchVariant(j, inst.grp, v.id, (p) => (p === 'n' ? canvasNodeId() : canvasAnnoId())))) })) });
                 }
                 return out;
               })(),
@@ -3699,11 +3982,26 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
               pointerEvents: 'none', zIndex: 50, borderRadius: 2,
             }} />
           )}
+          {!slideshow && (json.groups || []).filter(g => g.grid && g.grid.columns > 0).map(g => {
+            // Rejilla de columnas del marco (como las «layout grids» de Figma): solo al editar.
+            const gx = g.x || 0, gy = (g.y || 0) + 26, gw = g.w || CANVAS_GROUP_DEFAULT_W, gh = (g.h || CANVAS_GROUP_DEFAULT_H) - 26;
+            const { columns, gutter = 16, margin = 16 } = g.grid;
+            const cw = (gw - margin * 2 - gutter * (columns - 1)) / columns;
+            return Array.from({ length: columns }, (_, i) => (
+              <div key={g.id + 'col' + i} style={{ position: 'absolute', left: gx + margin + i * (cw + gutter), top: gy, width: Math.max(1, cw), height: gh, background: 'rgba(224, 69, 123, 0.08)', pointerEvents: 'none', zIndex: 2 }} />
+            ));
+          })}
+          {!slideshow && ['v', 'h'].flatMap(axis => (((json.vars && json.vars.guides) || {})[axis] || []).map((pos, i) => (
+            guideDrag && guideDrag.axis === axis && guideDrag.index === i ? null : (
+              <div key={'guide' + axis + i} className={`cv-guide cv-guide-${axis}`} onPointerDown={(e) => startGuideDrag(e, axis, i)}
+                style={axis === 'v' ? { left: pos } : { top: pos }} title={t('canvas.rulers.guide')} />
+            ))))}
+          {guideDrag && !guideDrag.out && <div className={`cv-guide cv-guide-${guideDrag.axis} dragging`} style={guideDrag.axis === 'v' ? { left: guideDrag.pos } : { top: guideDrag.pos }} />}
           {slideshow && slideshow.slides[slideshow.idx] && (() => {
             // Presentando: solo se ve la pantalla (marco) actual; lo demás queda tapado por un fondo oscuro.
             const g = (json.groups || []).find(x => x.id === slideshow.slides[slideshow.idx].groupId);
             if (!g) return null;
-            const gx = g.x || 0, gy = g.y || 0, gw = g.w || CANVAS_GROUP_DEFAULT_W, gh = g.h || CANVAS_GROUP_DEFAULT_H, B = 100000;
+            const gx = g.x || 0, gy = (g.y || 0) + (g.scroll ? presScroll : 0), gw = g.w || CANVAS_GROUP_DEFAULT_W, gh = g.h || CANVAS_GROUP_DEFAULT_H, B = 100000;
             const st = { position: 'absolute', background: 'rgb(24, 24, 27)', zIndex: 70, pointerEvents: 'none' };
             return <>
               <div style={{ ...st, left: -B, top: -B, width: 2 * B, height: gy + B }} />
@@ -3978,6 +4276,19 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
               nodes; each annotation re-enables events when interactive. */}
           <svg className="canvas-edges canvas-edges-front" style={{ overflow: 'visible', position: 'absolute', top: 0, left: 0, pointerEvents: 'none' }}>
             {!((json.annotations || []).some(a => a.z != null) || (json.nodes || []).some(n => n.z != null)) && annoFilter((json.annotations || []).filter(a => a.layer !== 'back' && a.z == null)).map(a => renderAnnotation(a))}
+            {livePreview && livePreview.kind === 'vpen' && (
+              <g className="canvas-vpen-preview" style={{ pointerEvents: 'none' }}>
+                <path d={livePreview.d} fill="none" stroke={livePreview.color} strokeWidth={livePreview.size} strokeLinecap="round" strokeLinejoin="round" />
+                {livePreview.rubber && <path d={livePreview.rubber} fill="none" stroke={livePreview.color} strokeWidth={1 / (viewport.zoom || 1)} strokeDasharray={`${4 / (viewport.zoom || 1)} ${3 / (viewport.zoom || 1)}`} />}
+                {livePreview.pts.map((p, i) => (
+                  <g key={i}>
+                    {p.hout && <><line x1={p.x} y1={p.y} x2={p.hout[0]} y2={p.hout[1]} stroke="#e0457b" strokeWidth={1 / (viewport.zoom || 1)} /><circle cx={p.hout[0]} cy={p.hout[1]} r={3 / (viewport.zoom || 1)} fill="#fff" stroke="#e0457b" strokeWidth={1 / (viewport.zoom || 1)} /></>}
+                    {p.hin && <><line x1={p.x} y1={p.y} x2={p.hin[0]} y2={p.hin[1]} stroke="#e0457b" strokeWidth={1 / (viewport.zoom || 1)} /><circle cx={p.hin[0]} cy={p.hin[1]} r={3 / (viewport.zoom || 1)} fill="#fff" stroke="#e0457b" strokeWidth={1 / (viewport.zoom || 1)} /></>}
+                    <rect x={p.x - 4 / (viewport.zoom || 1)} y={p.y - 4 / (viewport.zoom || 1)} width={8 / (viewport.zoom || 1)} height={8 / (viewport.zoom || 1)} fill={i === 0 ? 'var(--accent,#2383E2)' : '#fff'} stroke="var(--accent,#2383E2)" strokeWidth={1.5 / (viewport.zoom || 1)} />
+                  </g>
+                ))}
+              </g>
+            )}
             {livePreview && livePreview.kind === 'path' && (
               livePreview.tool === 'pen'
                 ? <path d={livePreview.d} fill={livePreview.color} stroke="none" opacity={livePreview.opacity != null ? livePreview.opacity : 1} />

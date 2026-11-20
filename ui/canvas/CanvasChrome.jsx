@@ -21,6 +21,7 @@ const P = {
   highlighter: <><path d="M6 15 15 6l3 3-9 9H6z" /><path d="M4 21h9" /></>,
   laser: <><circle cx="17" cy="7" r="2.5" /><path d="M14.8 9.2 4 20M4 16v4h4" /></>,
   props: <><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0" /><circle cx="16" cy="6" r="2" /><circle cx="10" cy="12" r="2" /><circle cx="18" cy="18" r="2" /></>,
+  vpen: <><path d="M12 19l7-7 3 3-7 7z" /><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18z" /><path d="M2 2l7.6 7.6" /><circle cx="11" cy="11" r="2" /></>,
   bucket: <><path d="m5 11 7-7 7 7-7 7z" /><path d="M5 11h14" /><path d="M20 15.5c0 1.2-.8 2-1.5 2s-1.5-.8-1.5-2c0-.9 1.5-3 1.5-3s1.5 2.1 1.5 3z" /></>,
   eraser: <><path d="M9 19 4.5 14.5a2 2 0 0 1 0-2.8l7-7a2 2 0 0 1 2.8 0l4.2 4.2a2 2 0 0 1 0 2.8L12 19z" /><path d="M9 19h11" /></>,
   line: <path d="M5 19 19 5" />,
@@ -89,6 +90,7 @@ export function CvIcon({ name, size = 18, stroke = 1.7 }) {
 // Herramientas de dibujo que no caben en la barra principal: van al menú
 // «Más herramientas»; si una está activa, se muestra también en la barra.
 const DRAW_EXTRA = [
+  { tool: 'vpen', icon: 'vpen', label: 'canvas.tool.vpen' },
   { tool: 'highlighter', icon: 'highlighter', label: 'canvas.tool.highlighter' },
   { tool: 'laser', icon: 'laser', label: 'canvas.tool.laser' },
   { tool: 'line', icon: 'line', label: 'canvas.tool.line' },
@@ -192,6 +194,8 @@ export function CanvasActions({ a, snapGrid, fullscreen }) {
   // Arriba a la derecha solo lo de uso constante; el resto cuelga de «⋯».
   const moreItems = [
     { label: t('canvas.snapGrid'), icon: <CvIcon name="grid" size={15} />, checked: snapGrid ? true : undefined, onSelect: a.toggleSnap },
+    { label: t('canvas.rulers.toggle'), icon: <CvIcon name="grid" size={15} />, checked: a.rulersOn ? true : undefined, onSelect: a.toggleRulers },
+    { label: t('canvas.follow.toggle'), icon: <CvIcon name="present" size={15} />, checked: a.followAgent ? true : undefined, onSelect: a.toggleFollow },
     { label: t('canvas.autoLayout'), icon: <CvIcon name="layout" size={15} />, submenu: () => layoutItems },
     { label: t('canvas.session'), icon: <CvIcon name="timer" size={15} />, submenu: () => sessionItems },
     { type: 'sep' },

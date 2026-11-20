@@ -66,3 +66,19 @@ export function sidesD(x, y, w, h, sides) {
   if (s.l) out.push(`M ${x} ${y} V ${y + h}`);
   return out.join(' ');
 }
+
+/** Caja local de un dibujo (sin su desplazamiento), para colocar una imagen de relleno. */
+export function localBox(a) {
+  if (a.kind === 'shape' && a.w != null) return { x: a.x, y: a.y, w: a.w, h: a.h };
+  return a.bbox ? { x: a.bbox.x, y: a.bbox.y, w: a.bbox.w, h: a.bbox.h } : null;
+}
+
+/** Imagen como relleno: imageFill = { src, fit: 'cover'|'contain'|'fill', opacity? } → <pattern> en el espacio del dibujo. */
+export function imageFillSvg(a, id, esc = xesc) {
+  const f = a && a.imageFill;
+  const b = f && f.src ? localBox(a) : null;
+  if (!b || !(b.w > 0 && b.h > 0)) return '';
+  const par = f.fit === 'contain' ? 'xMidYMid meet' : f.fit === 'fill' ? 'none' : 'xMidYMid slice';
+  return `<pattern id="${id}" patternUnits="userSpaceOnUse" x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}">`
+    + `<image href="${esc(f.src)}" x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" preserveAspectRatio="${par}"${f.opacity != null ? ` opacity="${num(f.opacity, 1)}"` : ''}/></pattern>`;
+}

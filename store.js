@@ -933,6 +933,11 @@ function emitMcpAction(action) {
   }
 }
 
+// «Seguir al agente»: dónde acaba de cambiar un canvas (campo `mcpCanvas` del canal de presencia).
+const mcpCanvasListeners = new Set();
+const mcpSeenCanvasIds = new Set();
+export const onMcpCanvas = (cb) => { mcpCanvasListeners.add(cb); return () => mcpCanvasListeners.delete(cb); };
+
 // Separate channel for "live" AI pointer requests: focus_note,
 // highlight_in_note. These cause the renderer to actively interact with
 // the editor surface (window focus, CodeMirror selection, scroll-into-
@@ -1020,6 +1025,13 @@ function attachAwarenessHandler(awareness, selfClientId) {
           for (let i = 0; i < 64; i++) mcpSeenActionIds.delete(it.next().value);
         }
         emitMcpAction(action);
+      }
+      const cv = state.mcpCanvas;
+      if (cv && cv.id && !mcpSeenCanvasIds.has(cv.id)) {
+        mcpSeenCanvasIds.add(cv.id);
+        if (mcpSeenCanvasIds.size > 256) { const it = mcpSeenCanvasIds.values(); for (let i = 0; i < 64; i++) mcpSeenCanvasIds.delete(it.next().value); }
+        // Solo avisos recientes (al conectarse llega el último estado de cada agente, que puede ser viejo).
+        if (!cv.at || Date.now() - cv.at < 15000) for (const cb of mcpCanvasListeners) { try { cb(cv); } catch {} }
       }
       const pointer = state.aiPointer;
       if (pointer && pointer.id && !aiSeenPointerIds.has(pointer.id)) {

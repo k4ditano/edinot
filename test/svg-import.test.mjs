@@ -177,3 +177,8 @@ test('arcsToCubics turns a circle into 4 Bézier curves ending where the arcs di
   const mid = curves[1].v;
   assert.ok(Math.abs(mid[4] - 100) < 0.01 && Math.abs(mid[5] - 50) < 0.01);
 });
+
+test('a <pattern> with an <image> becomes an image fill', () => {
+  const r = svgToCanvas('<svg><defs><pattern id="p" width="1" height="1"><image href="https://x/a.jpg" width="10" height="10" preserveAspectRatio="xMidYMid slice"/></pattern></defs><circle cx="20" cy="20" r="20" fill="url(#p)"/></svg>');
+  assert.deepEqual(r.annotations[0].imageFill, { src: 'https://x/a.jpg', fit: 'cover' });
+});

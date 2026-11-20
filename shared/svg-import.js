@@ -328,7 +328,7 @@ export function svgToCanvas(svg, { x = 0, y = 0, scale = 1, newId, zStart } = {}
     }
     return { type: 'linear', x1: r2(fx(attr('x1'), 0)), y1: r2(fy(attr('y1'), 0)), x2: r2(fx(attr('x2'), 1)), y2: r2(fy(attr('y2'), 0)), stops };
   };
-  const firstStop = (ref) => { const g = gradientOf(ref, null); return g ? g.stops[0].color : null; };
+  const firstStop = (ref) => { const g = gradientOf(ref, null); return g ? g.stops[0].color : (refOf(ref) && refOf(ref).tag === 'pattern' ? '#cccccc' : null); };
 
   // Sombra: feDropShadow, o feOffset + feGaussianBlur (con feFlood para el color), o CSS drop-shadow().
   const shadowOf = (v, sk) => {
@@ -414,7 +414,23 @@ export function svgToCanvas(svg, { x = 0, y = 0, scale = 1, newId, zStart } = {}
     const fillGrad = /^url\(/i.test(String(st.fill || '').trim()) ? st.fill : null;
     const fill = st.fill === 'none' ? 'none' : (fillGrad ? (firstStop(fillGrad) || '#000000') : (colorOf(st.fill) || '#000000'));
     const stroke = st.stroke == null || st.stroke === 'none' ? null : (/^url\(/i.test(String(st.stroke).trim()) ? firstStop(st.stroke) : colorOf(st.stroke)) || null;
-    const paint = (a, box) => { if (fillGrad) { const g = gradientOf(fillGrad, box); if (g) a.gradient = g; } return a; };
+    const paint = (a, box) => {
+      if (!fillGrad) return a;
+      const pat = refOf(fillGrad);
+      if (pat && pat.tag === 'pattern') {
+        // <pattern> con una <image>: imagen como relleno (cubrir, salvo que diga lo contrario).
+        const find = (e) => (e.tag === 'image' ? e : (e.children || []).map(find).find(Boolean));
+        const img = find(pat);
+        const href = img && (img.attrs.href || img.attrs['xlink:href']);
+        if (href && /^(https?:|data:image\/)/i.test(href)) {
+          const par = String(img.attrs.preserveAspectRatio || '');
+          a.imageFill = { src: href, fit: par === 'none' ? 'fill' : /meet/.test(par) ? 'contain' : 'cover' };
+        }
+        return a;
+      }
+      const g = gradientOf(fillGrad, box); if (g) a.gradient = g;
+      return a;
+    };
     const op = (parseFloat(st.opacity ?? 1) || 1) * (fill !== 'none' ? (parseFloat(st['fill-opacity'] ?? 1)) : (parseFloat(st['stroke-opacity'] ?? 1)));
     const style = (a) => {
       const bf = /blur\(\s*([\d.]+)/i.exec(String(el.attrs['backdrop-filter'] || el.attrs['-webkit-backdrop-filter'] || ''));

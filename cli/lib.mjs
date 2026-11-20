@@ -494,6 +494,7 @@ function openLocal(cfg) {
     // remote ops shape. is_app_open / focus / highlight only make sense
     // when there's a live sync peer to talk to.
     publishMcpAction() { /* noop */ },
+    publishCanvasActivity() { /* noop */ },
     publishAiPointer() { /* noop */ },
     publishAiPresence() { /* noop */ },
     publishAiAgentPresence() { /* noop */ },
@@ -503,6 +504,8 @@ function openLocal(cfg) {
     setAmbientConfig() { throw new Error('local mode — ambient config requires live sync'); },
     getProactiveSignals() { return { enabled: false, config: this.getAmbientConfig(), signals: [] }; },
     getAgentPolicy(vaultId) { return vaultId ? null : {}; },
+    getComponentLibrary() { return []; },
+    setComponentLibrary() { throw new Error('local mode — the shared component library requires live sync'); },
     setAgentPolicy() { throw new Error('local mode — agent policy requires live sync'); },
     isAgentAllowedInVault() { return true; },
     claimAgentTask() { throw new Error('local mode — agent tasks require live sync'); },
@@ -1998,6 +2001,19 @@ export const ops = {
           });
         } catch { /* awareness errors are non-fatal — the data write already succeeded */ }
       },
+      // «Seguir al agente»: dónde acaba de cambiar un canvas (nota + caja en el mundo). Campo propio del canal de
+      // presencia para no pisar el aviso de mcpAction que se publica justo después.
+      publishCanvasActivity(act) {
+        try {
+          const ident = cfg && cfg.__agentIdentity;
+          provider.awareness.setLocalStateField('mcpCanvas', {
+            ...act,
+            agent: ident ? { alias: ident.alias, kind: ident.kind, device: ident.device } : undefined,
+            id: 'cv-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+            at: Date.now(),
+          });
+        } catch { /* no crítico */ }
+      },
       // Same channel idea as publishMcpAction but for pointer-style requests
       // ("look at this note", "look at this passage"). The renderer reacts:
       // calls windowFocus IPC, dispatches a CM selection on (fromCh,toCh)
@@ -2057,6 +2073,9 @@ export const ops = {
           return true;
         });
       },
+      // Biblioteca de componentes compartida (datos comunes del espacio de trabajo).
+      getComponentLibrary() { const v = yMeta.get('componentLibrary'); return Array.isArray(v) ? v : []; },
+      setComponentLibrary(list) { yMeta.set('componentLibrary', Array.isArray(list) ? list : []); },
       getAgentPolicy(vaultId) {
         const all = (yMeta.get('agentPolicy') && typeof yMeta.get('agentPolicy') === 'object') ? yMeta.get('agentPolicy') : {};
         return vaultId ? (all[vaultId] || null) : all;

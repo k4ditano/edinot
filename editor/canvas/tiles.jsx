@@ -2,6 +2,23 @@
 
 import { shapeD, shapeTextBox } from './shapes.js';
 import { labelTextStyle } from '../../shared/text-style.js';
+import { parseRich } from '../../shared/rich-text.js';
+
+// Texto con estilos mezclados (**negrita**, *cursiva*, __subrayado__, ~~tachado~~, `código`, {#color|texto}, {+tamaño|texto}).
+function RichText({ text }) {
+  return parseRich(text).map((line, i) => (
+    <span key={i} style={{ display: 'block' }}>
+      {line.length ? line.map((r, k) => (
+        <span key={k} style={{
+          ...(r.b ? { fontWeight: 700 } : null), ...(r.i ? { fontStyle: 'italic' } : null),
+          ...((r.u || r.s) ? { textDecoration: [r.u && 'underline', r.s && 'line-through'].filter(Boolean).join(' ') } : null),
+          ...(r.color ? { color: r.color } : null), ...(r.size ? { fontSize: r.size } : null),
+          ...(r.code ? { fontFamily: "'JetBrains Mono', ui-monospace, monospace", fontSize: '0.9em', background: 'rgba(127,127,127,.15)', padding: '0 .25em', borderRadius: 4 } : null),
+        }}>{r.t}</span>
+      )) : '\u00a0'}
+    </span>
+  ));
+}
 import { useI18n, t, getLang } from '../../i18n.js';
 import { useRef, useState, useMemo, useEffect, useLayoutEffect, useDeferredValue, useCallback, memo } from 'react';
 import { mountDbBlock, sweepDbBlocks } from '../db/mount.jsx';
@@ -442,6 +459,7 @@ export function CanvasTileImpl({ node, note, syncConfig, onMouseDown, onOpen, on
     <div className={`canvas-node canvas-node-${node.kind || 'text'}${isSticky ? ' canvas-node-sticky' : ''}${isSelected ? ' selected' : ''}${animStyle ? ' canvas-node-animating' : ''}`}
       style={{ left: node.x, top: node.y, width: w, ...(isLabel ? { minHeight: h } : { height: h }), '--node-color': node.color || '', ...(animStyle || {}) }}
       data-node-id={node.id}
+      data-hover={(node.anim && node.anim.hover) || undefined} data-loop={(node.anim && node.anim.loop) || undefined}
       onDoubleClick={(e) => {
         if (e.target.closest && e.target.closest('.canvas-node-del, .canvas-node-edge-anchor, .canvas-node-resize, a, button')) return;
         if ((isText || isLabel || isShape) && onEditText) { e.stopPropagation(); setEditingText(node.text || ''); return; }
@@ -462,7 +480,7 @@ export function CanvasTileImpl({ node, note, syncConfig, onMouseDown, onOpen, on
             const sh = node.shape || 'rect';
             const col = node.color || 'var(--accent, #2383E2)';
             const fill = node.color ? node.color : 'color-mix(in srgb, var(--accent, #2383E2) 12%, transparent)';
-            const body = editingText !== null ? textEditor : <div style={{ whiteSpace: 'pre-wrap', width: '100%', overflowWrap: 'anywhere' }}>{node.text || ''}</div>;
+            const body = editingText !== null ? textEditor : <div style={{ whiteSpace: 'pre-wrap', width: '100%', overflowWrap: 'anywhere' }}>{node.rich && node.text ? <RichText text={node.text} /> : (node.text || '')}</div>;
             if (sh === 'rect' || sh === 'ellipse') {
               return (
                 <div style={{ position: 'absolute', inset: 0, boxSizing: 'border-box', background: fill, border: '1.5px solid ' + col,
@@ -606,7 +624,7 @@ export function CanvasTileImpl({ node, note, syncConfig, onMouseDown, onOpen, on
         {isAttachment && <CanvasAttachmentPreview node={node} syncConfig={syncConfig} />}
         {isLabel && (editingText !== null
           ? <div className="canvas-label-grow" data-value={(editingText || '') + ' '} style={labelTextStyle(node)}>{textEditor}</div>
-          : <div className="canvas-node-labeltext" style={labelTextStyle(node)}>{node.text || t('canvas.labelDefault')}</div>)}
+          : <div className="canvas-node-labeltext" style={labelTextStyle(node)}>{node.rich && node.text ? <RichText text={node.text} /> : (node.text || t('canvas.labelDefault'))}</div>)}
         {isDraw && (
           <svg className="canvas-node-drawsvg" viewBox={`0 0 ${node.w || 100} ${node.h || 100}`} preserveAspectRatio="none">
             <path d={node.path || ''} fill="none" stroke={node.color || '#ea580c'}

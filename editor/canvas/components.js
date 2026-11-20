@@ -8,7 +8,7 @@
 // conservando su propio texto (cada botón puede decir algo distinto). «Desvincular» la convierte en piezas normales.
 
 const POS_N = ['x', 'y'];
-const OWN = new Set(['id', 'grp', 'cmain', 'cname', 'cinst', 'cref', 'z', 'locked', 'hidden', 'link']);
+const OWN = new Set(['id', 'grp', 'cmain', 'cname', 'cinst', 'cref', 'clib', 'z', 'locked', 'hidden', 'link']);
 const KEEP_TEXT = new Set(['text']);
 
 const rnd = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -70,10 +70,12 @@ export function insertInstance(json, cid, at, newId = (p) => p + rnd()) {
 }
 
 /** Rehace las instancias a partir de su principal. Devuelve el mismo objeto si ya están al día. */
-export function syncInstances(json) {
+export function syncInstances(json, library = null) {
   const nodes = json.nodes || [], annos = json.annotations || [];
   if (!nodes.some(n => n.cinst) && !annos.some(a => a.cinst)) return json;
   const mainById = new Map([...nodes.filter(n => n.cmain).map(n => [n.id, { it: n, kind: 'n' }]), ...annos.filter(a => a.cmain).map(a => [a.id, { it: a, kind: 'a' }])]);
+  // Las instancias de la biblioteca siguen a su entrada publicada (aunque el principal esté en otro canvas).
+  if (library) for (const m of libraryMains(library)) if (!mainById.has(m.it.id)) mainById.set(m.it.id, m);
   // Desplazamiento de cada instancia (por grupo): el de su primera pieza respecto a la del principal.
   const delta = new Map();
   for (const [kind, arr] of [['n', nodes], ['a', annos]]) {
@@ -116,3 +118,143 @@ export function detachInstances(json, nodeIds, annoIds) {
 }
 
 export const POSITION_KEYS = POS_N;
+
+// ── Variantes (como los «component sets» de Figma) ──────────────────────
+// Varios componentes principales forman un conjunto con el mismo `cset`; cada uno es una variante (`cvariant`).
+// Una instancia puede cambiar de variante: sus piezas pasan a copiar las de la otra variante, por orden, conservando
+// su sitio y sus textos.
+
+const mainItemsOf = (json, cid) => [
+  ...(json.nodes || []).filter(n => n.cmain === cid).map(it => ({ kind: 'n', it })),
+  ...(json.annotations || []).filter(a => a.cmain === cid).map(it => ({ kind: 'a', it })),
+];
+
+/** Variantes del conjunto al que pertenece el componente `cid`: [{ id, variant }]. */
+export function variantsOf(json, cid) {
+  const all = listComponentsFull(json);
+  const me = all.find(c => c.id === cid);
+  if (!me || !me.set) return me ? [{ id: me.id, variant: me.variant || me.name }] : [];
+  return all.filter(c => c.set === me.set).map(c => ({ id: c.id, variant: c.variant || c.name }));
+}
+
+export function listComponentsFull(json) {
+  const base = listComponents(json);
+  return base.map(c => {
+    const it = [...(json.nodes || []), ...(json.annotations || [])].find(x => x.cmain === c.id) || {};
+    return { ...c, set: it.cset || null, variant: it.cvariant || null };
+  });
+}
+
+/** Crea una variante nueva del componente `cid` (copia de su principal, a la derecha). Devuelve { json, id }. */
+export function addVariant(json, cid, variantName, newId = (p) => p + rnd()) {
+  const items = mainItemsOf(json, cid);
+  if (!items.length) return { json, id: null };
+  const first = items[0].it;
+  const set = first.cset || first.cname || 'Componente';
+  const nid = 'cmp' + rnd(), g = 'lg' + rnd();
+  const boxes = items.map(({ kind, it }) => (kind === 'n' ? { x: it.x || 0, w: it.w || 0 } : { x: worldOf(it, 'a').x, w: (it.bbox && it.bbox.w) || 0 }));
+  const dx = Math.max(...boxes.map(b => b.x + b.w)) - Math.min(...boxes.map(b => b.x)) + 40;
+  const tagSet = (it) => (it.cmain === cid ? { ...it, cset: set, cvariant: it.cvariant || 'Predeterminada' } : it);
+  const copy = (it, kind) => {
+    const r = { ...it, id: newId(kind === 'n' ? 'n' : 'ann'), cmain: nid, cset: set, cvariant: variantName, grp: g };
+    if (kind === 'n') r.x = (it.x || 0) + dx; else r.ox = (it.ox || 0) + dx;
+    delete r.link;
+    return r;
+  };
+  const nodes = (json.nodes || []).map(tagSet), annos = (json.annotations || []).map(tagSet);
+  return {
+    id: nid,
+    json: {
+      ...json,
+      nodes: [...nodes, ...items.filter(x => x.kind === 'n').map(x => copy(x.it, 'n'))],
+      annotations: [...annos, ...items.filter(x => x.kind === 'a').map(x => copy(x.it, 'a'))],
+    },
+  };
+}
+
+/** Cambia de variante la instancia cuyo grupo es `grp`. Después hay que llamar a syncInstances. */
+export function switchVariant(json, grp, targetCid, newId = (p) => p + rnd()) {
+  const inst = [
+    ...(json.nodes || []).filter(n => n.grp === grp && n.cinst).map(it => ({ kind: 'n', it })),
+    ...(json.annotations || []).filter(a => a.grp === grp && a.cinst).map(it => ({ kind: 'a', it })),
+  ];
+  if (!inst.length) return json;
+  const cur = inst[0].it.cinst;
+  const curMain = mainItemsOf(json, cur), target = mainItemsOf(json, targetCid);
+  if (!target.length || cur === targetCid) return json;
+  const pos = (ref) => curMain.findIndex(m => m.it.id === ref);
+  inst.sort((p, q) => pos(p.it.cref) - pos(q.it.cref));
+  // Desplazamiento de la instancia respecto a su principal actual (para dejarla en su sitio).
+  const ref0 = inst[0];
+  const w = worldOf(ref0.it, ref0.kind);
+  const t0 = worldOf(target[0].it, target[0].kind);
+  const texts = inst.map(x => x.it.text).filter(v => typeof v === 'string');
+  let ti = 0;
+  const keepIds = new Map();
+  target.forEach((tm, i) => { const old = inst[i] && inst[i].kind === tm.kind ? inst[i] : null; keepIds.set(tm.it.id, old ? old.it.id : newId(tm.kind === 'n' ? 'n' : 'ann')); });
+  const z0 = Math.min(...inst.map(x => (x.it.z != null ? x.it.z : 0)));
+  const build = (tm, i) => {
+    const it = { ...tm.it };
+    for (const k of ['cmain', 'cname', 'cset', 'cvariant', 'link']) delete it[k];
+    it.id = keepIds.get(tm.it.id); it.grp = grp; it.cinst = targetCid; it.cref = tm.it.id; it.z = z0 + i;
+    if (typeof it.text === 'string' && ti < texts.length) it.text = texts[ti++];
+    // misma posición relativa que en el principal destino, colocada donde estaba la instancia
+    if (tm.kind === 'n') { it.x = (tm.it.x || 0) - t0.x + w.x; it.y = (tm.it.y || 0) - t0.y + w.y; }
+    else { it.ox = (tm.it.ox || 0) - t0.x + w.x; it.oy = (tm.it.oy || 0) - t0.y + w.y; }
+    return { kind: tm.kind, it };
+  };
+  const built = target.map(build);
+  const drop = new Set(inst.map(x => x.it.id));
+  return {
+    ...json,
+    nodes: [...(json.nodes || []).filter(n => !drop.has(n.id)), ...built.filter(b => b.kind === 'n').map(b => b.it)],
+    annotations: [...(json.annotations || []).filter(a => !drop.has(a.id)), ...built.filter(b => b.kind === 'a').map(b => b.it)],
+  };
+}
+
+// ── Biblioteca compartida (componentes que se usan en cualquier canvas) ─
+// Vive en los datos comunes del espacio de trabajo: [{ id, name, nodes: [...], annos: [...], updatedAt }], con las
+// piezas del principal llevadas al origen (0, 0). Una instancia de la biblioteca lleva `clib: true`, `cinst` = id de
+// la entrada y `cref` = id de la pieza; se rehace igual que las demás (syncInstances recibe la biblioteca).
+
+export function libraryEntryFrom(json, cid) {
+  const items = mainItemsOf(json, cid);
+  if (!items.length) return null;
+  const pts = items.map(({ kind, it }) => worldOf(it, kind));
+  const ox = Math.min(...pts.map(p => p.x)), oy = Math.min(...pts.map(p => p.y));
+  const clean = (it) => { const r = { ...it }; for (const k of ['grp', 'z', 'link', 'locked', 'hidden', 'cset', 'cvariant']) delete r[k]; return r; };
+  return {
+    id: cid,
+    name: items[0].it.cname || 'Componente',
+    nodes: items.filter(x => x.kind === 'n').map(x => ({ ...clean(x.it), x: (x.it.x || 0) - ox, y: (x.it.y || 0) - oy })),
+    annos: items.filter(x => x.kind === 'a').map(x => ({ ...clean(x.it), ox: (x.it.ox || 0) - ox, oy: (x.it.oy || 0) - oy })),
+    updatedAt: Date.now(),
+  };
+}
+
+export function publishToLibrary(library, entry) {
+  const list = Array.isArray(library) ? library.filter(e => e.id !== entry.id) : [];
+  return [...list, entry];
+}
+
+export function insertFromLibrary(json, entry, at, newId = (p) => p + rnd()) {
+  if (!entry) return { json, ids: null };
+  const target = at || { x: 0, y: 0 };
+  const g = 'lg' + rnd();
+  const effN = (n, i) => (n.z != null ? n.z : i), effA = (x, i) => (typeof x.z === 'number' ? x.z : (x.layer === 'back' ? -1e9 + i : 1e9 + i));
+  let z = Math.ceil(Math.max(0, ...(json.nodes || []).map(effN), ...(json.annotations || []).map(effA))) + 1;
+  const strip = (it) => { const r = { ...it }; delete r.cmain; delete r.cname; return r; };
+  const annos = (entry.annos || []).map(a => ({ ...strip(a), id: newId('ann'), ox: (a.ox || 0) + target.x, oy: (a.oy || 0) + target.y, grp: g, cinst: entry.id, cref: a.id, clib: true, z: z++ }));
+  const nodes = (entry.nodes || []).map(n => ({ ...strip(n), id: newId('n'), x: (n.x || 0) + target.x, y: (n.y || 0) + target.y, grp: g, cinst: entry.id, cref: n.id, clib: true, z: z++ }));
+  return { json: { ...json, nodes: [...(json.nodes || []), ...nodes], annotations: [...(json.annotations || []), ...annos] }, ids: { nodes: nodes.map(n => n.id), annos: annos.map(a => a.id), grp: g } };
+}
+
+/** Piezas de la biblioteca con la forma de un principal, para syncInstances. */
+export function libraryMains(library) {
+  const out = [];
+  for (const e of Array.isArray(library) ? library : []) {
+    for (const n of e.nodes || []) out.push({ it: { ...n, cmain: e.id }, kind: 'n' });
+    for (const a of e.annos || []) out.push({ it: { ...a, cmain: e.id }, kind: 'a' });
+  }
+  return out;
+}

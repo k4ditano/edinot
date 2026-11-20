@@ -50,3 +50,37 @@ test('an instance is stacked on top, keeping the main order (label above its rec
   const zl = j.nodes.find(x => x.id === ids.nodes[0]).z, zr = j.annotations.find(a => a.id === ids.annos[0]).z;
   assert.ok(zl > zr && zr > 5);
 });
+
+test('variants: add a variant and switch an instance to it (keeps place and text)', async () => {
+  const { addVariant, switchVariant, variantsOf } = await import('../editor/canvas/components.js');
+  const { json, id: cid } = createComponent(base(), ['lbl'], ['bg'], 'Botón');
+  let { json: j, id: v2 } = addVariant(json, cid, 'Peligro', id);
+  j = { ...j, annotations: j.annotations.map(a => (a.cmain === v2 ? { ...a, fill: '#ef4444' } : a)) };
+  assert.deepEqual(variantsOf(j, cid).map(v => v.variant), ['Predeterminada', 'Peligro']);
+  let r = insertInstance(j, cid, { x: 500, y: 300 }, id);
+  j = { ...r.json, nodes: r.json.nodes.map(x => (x.id === r.ids.nodes[0] ? { ...x, text: 'Borrar' } : x)) };
+  j = syncInstances(switchVariant(j, r.ids.grp, v2, id));
+  const bg = j.annotations.find(a => a.grp === r.ids.grp), lbl = j.nodes.find(n => n.grp === r.ids.grp);
+  assert.equal(bg.fill, '#ef4444');
+  assert.deepEqual([bg.bbox.x + bg.ox, bg.bbox.y + bg.oy], [500, 300]);
+  assert.equal(lbl.text, 'Borrar');
+  assert.deepEqual([lbl.x, lbl.y], [520, 315]);
+});
+
+test('shared library: publish a component and use it in another canvas, updates follow the library', async () => {
+  const { libraryEntryFrom, publishToLibrary, insertFromLibrary } = await import('../editor/canvas/components.js');
+  const { json, id: cid } = createComponent(base(), ['lbl'], ['bg'], 'Botón');
+  let lib = publishToLibrary([], libraryEntryFrom(json, cid));
+  assert.equal(lib[0].name, 'Botón');
+  let other = { nodes: [], annotations: [] };
+  const r = insertFromLibrary(other, lib[0], { x: 50, y: 60 }, id);
+  other = r.json;
+  const bg = other.annotations[0];
+  assert.deepEqual([bg.bbox.x + bg.ox, bg.bbox.y + bg.oy, bg.clib], [50, 60, true]);
+  // el principal cambia y se vuelve a publicar
+  const changed = { ...json, annotations: json.annotations.map(a => (a.cmain ? { ...a, fill: '#16a34a' } : a)) };
+  lib = publishToLibrary(lib, libraryEntryFrom(changed, cid));
+  const synced = syncInstances(other, lib);
+  assert.equal(synced.annotations[0].fill, '#16a34a');
+  assert.deepEqual([synced.annotations[0].bbox.x + synced.annotations[0].ox, synced.annotations[0].bbox.y + synced.annotations[0].oy], [50, 60]);
+});

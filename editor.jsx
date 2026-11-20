@@ -35,7 +35,7 @@ import {
   yCommentsV2, yCommentRepliesV2, yAgentTasksV2,
   getContent, getContentString, setContent, deleteContent, mirrorContentToVault,
   migrateFromLocalStorage, seedDefaultsIfEmpty, whenIndexedDbReady,
-  getSyncConfig, setSyncConfig, connectSync, disconnectSync, reconnectSync, resetSyncForReconnect, onSyncStatus, onPresence, onMcpAction, onAiPointer, onAiPresence, onAiAgents,
+  getSyncConfig, setSyncConfig, connectSync, disconnectSync, reconnectSync, resetSyncForReconnect, onSyncStatus, onPresence, onMcpAction, onMcpCanvas, onAiPointer, onAiPresence, onAiAgents,
   getSyncProgress, onSyncProgress,
   isPerVaultMode, ensureActiveVaultProvider, getActiveVaultDoc, getActiveVaultId, listVaultRegistryEntries, getVaultDoc,
   trashFile, listTrash, restoreTrashed, purgeTrashed, purgeOldTrash, trashContents,
@@ -10342,6 +10342,22 @@ function EdinotApp() {
       return true;
     };
 
+    // «Seguir al agente» (interruptor por equipo, en el menú ⋯ del canvas): cuando un agente cambia un canvas, este
+    // equipo —si es el que estás usando— lo abre en modo canvas y lleva la vista a la zona cambiada.
+    const offFollow = onMcpCanvas((cv) => {
+      let on = false; try { on = localStorage.getItem('edinot.followAgent') === '1'; } catch {}
+      if (!on || !cv.noteId) return;
+      const ad = yMeta.get('activeDevice');
+      if (ad && ad.id && deviceIdRef.current && ad.id !== deviceIdRef.current) return;
+      setActiveId(cv.noteId);
+      let retries = 30;
+      const go = () => {
+        const view = ((typeof window !== 'undefined' && window.__edinotCanvasViews) || {})[cv.noteId];
+        if (view && view.followTo) { view.followTo(cv.bbox, cv.agent); return; }
+        if (--retries > 0) setTimeout(go, 120);
+      };
+      setTimeout(go, 120);
+    });
     const off = onAiPointer((p) => {
       // Any new pointer cancels an in-flight presentation.
       clearAll();
@@ -10486,6 +10502,7 @@ function EdinotApp() {
     });
     return () => {
       if (off) off();
+      if (offFollow) offFollow();
       clearAll();
     };
   }, []);

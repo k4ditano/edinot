@@ -9,8 +9,9 @@
 // Each tool call opens a short-lived Yjs session, performs ops, closes.
 // CRDT semantics: writes merge with any concurrent edits from app / other peers.
 
+import { frameToHtml } from '../shared/frame-html.js';
 import { booleanOp, canBoolean } from '../shared/canvas-boolean.js';
-import { createComponent, insertInstance, syncInstances, listComponents } from '../editor/canvas/components.js';
+import { createComponent, insertInstance, syncInstances, listComponents, addVariant, switchVariant, variantsOf, libraryEntryFrom, publishToLibrary, insertFromLibrary } from '../editor/canvas/components.js';
 import { applyAutoLayout } from '../editor/canvas/autolayout.js';
 import { itemCssText } from '../shared/canvas-css.js';
 import { canMask } from '../shared/canvas-mask.js';
@@ -190,7 +191,7 @@ const TOOLS_WITH_OWN_ACTION = new Set([
   'create_from_template',
   'add_table_row', 'update_table_row', 'delete_table_row',
   'canvas_from_text', 'create_canvas', 'add_canvas_node',
-  'draw_freehand_on_canvas', 'add_canvas_shape', 'update_canvas_annotation', 'import_svg_to_canvas', 'group_canvas_items', 'set_canvas_variables', 'create_canvas_component', 'insert_canvas_component', 'boolean_canvas_shapes',
+  'draw_freehand_on_canvas', 'add_canvas_shape', 'update_canvas_annotation', 'import_svg_to_canvas', 'group_canvas_items', 'set_canvas_variables', 'create_canvas_component', 'insert_canvas_component', 'boolean_canvas_shapes', 'add_component_variant', 'set_component_variant', 'export_frame_html', 'publish_component_to_library', 'insert_library_component',
   'create_form', 'update_form', 'delete_form',
 ]);
 
@@ -4602,6 +4603,12 @@ function varRef(json, kind, ref) {
   if (!v) throw new Error(`${kind === 'colors' ? 'colour' : 'text style'} variable not found: ${ref} — define it with set_canvas_variables`);
   return v.id;
 }
+function findComponent(json, ref) {
+  const all = listComponents(json);
+  const c = all.find(k => k.id === ref) || all.find(k => k.name.toLowerCase() === String(ref).toLowerCase());
+  if (!c) throw new Error(`component not found: ${ref}`);
+  return c;
+}
 const VARS_SCHEMA = {
   fillVar: z.string().nullable().optional().describe('link the fill (or a card colour) to a colour variable, by name or id'),
   colorVar: z.string().nullable().optional().describe('link the stroke / text colour to a colour variable, by name or id'),
@@ -4610,8 +4617,20 @@ const VARS_SCHEMA = {
 
 // Toda escritura de un canvas pasa por aquí: las instancias de componentes se rehacen desde su principal y los
 // marcos con auto layout recolocan su contenido, también cuando la app está cerrada.
-function commitCanvas(s, id, next, ctx) {
-  return s.canvasCommit(id, applyAutoLayout(syncInstances(next)), ctx);
+async function commitCanvas(s, id, next, ctx) {
+  let lib = null; try { lib = s.getComponentLibrary ? s.getComponentLibrary() : null; } catch {}
+  const fixed = applyAutoLayout(syncInstances(next, lib));
+  const r = await s.canvasCommit(id, fixed, ctx);
+  // Zona que ha cambiado (piezas nuevas o modificadas): la app que «sigue al agente» lleva la vista allí.
+  try {
+    const before = new Map([...(((ctx && ctx.block && ctx.block.json) || {}).nodes || []).map(n => ['n' + n.id, JSON.stringify(n)]), ...((((ctx && ctx.block && ctx.block.json) || {}).annotations) || []).map(a => ['a' + a.id, JSON.stringify(a)])]);
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, n = 0;
+    const add = (b) => { if (!b) return; n++; x0 = Math.min(x0, b.x); y0 = Math.min(y0, b.y); x1 = Math.max(x1, b.x + b.w); y1 = Math.max(y1, b.y + b.h); };
+    for (const nd of fixed.nodes || []) if (before.get('n' + nd.id) !== JSON.stringify(nd)) add({ x: nd.x || 0, y: nd.y || 0, w: nd.w || 240, h: nd.h || 140 });
+    for (const a of fixed.annotations || []) if (before.get('a' + a.id) !== JSON.stringify(a) && a.bbox) add({ x: a.bbox.x + (a.ox || 0), y: a.bbox.y + (a.oy || 0), w: a.bbox.w, h: a.bbox.h });
+    if (n && s.publishCanvasActivity) s.publishCanvasActivity({ noteId: id, bbox: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }, count: n });
+  } catch { /* el aviso no es crítico */ }
+  return r;
 }
 
 async function ensureCanvas(s, name) {
@@ -4909,7 +4928,13 @@ server.tool(
     align: z.enum(['left', 'center', 'right', 'justify']).optional(),
     wrap: z.boolean().optional().describe('label: fixed-width box (w) that wraps lines'),
     plain: z.boolean().optional().describe('label: design text (no padding/shadow, weight 400 by default)'),
+    rich: z.boolean().optional().describe('mixed styles inside the text with marks: **bold**, *italic*, __underline__, ~~strike~~, `code`, {#e11d48|colour}, {+24|size}'),
     ...VARS_SCHEMA,
+    anim: z.object({ enter: z.enum(['fade', 'up', 'down', 'left', 'right', 'scale', 'pop', 'blur']).optional(), dur: z.number().optional(), delay: z.number().optional(),
+      hover: z.enum(['lift', 'grow', 'dim', 'glow', 'press']).optional(), loop: z.enum(['pulse', 'spin', 'bounce', 'float', 'blink', 'wiggle']).optional() }).nullable().optional()
+      .describe('animation shown while presenting: entrance when its screen opens (with dur/delay ms), hover effect, loop'),
+    linkMode: z.enum(['screen', 'overlay']).optional().describe('overlay = open the linked frame on top as a modal (click outside closes it)'),
+    linkAnim: z.enum(['move', 'instant', 'dissolve', 'slide', 'smart']).optional().describe('prototype transition used when this link is clicked; smart = items with the same text / component piece fly to their new place'),
     noteName: z.string().optional(),
     text: z.string().optional(),
     url: z.string().optional(),
@@ -4926,7 +4951,7 @@ server.tool(
     h: z.number().optional(),
     color: z.string().optional(),
   },
-  async ({ name, kind, shape, fontSize, font, weight, italic, underline, strike, lineHeight, letterSpacing, transform, align, wrap, plain, fillVar, colorVar, textStyle, noteName, text, url, sha, path: filePath, data, filename, mime, query, sticky, x, y, w, h, color }) => withSession(async (s) => {
+  async ({ name, kind, shape, fontSize, font, weight, italic, underline, strike, lineHeight, letterSpacing, transform, align, wrap, plain, fillVar, colorVar, textStyle, anim, linkAnim, linkMode, rich, noteName, text, url, sha, path: filePath, data, filename, mime, query, sticky, x, y, w, h, color }) => withSession(async (s) => {
     // Resolve data/url into an uploaded blob (same pipeline as attach_image).
     const uploadBlobInput = async (fallbackName) => {
       const cfg = resolveCfg();
@@ -4949,6 +4974,9 @@ server.tool(
     if (fillVar) node.fillVar = varRef(block.json, 'colors', fillVar);
     if (colorVar) node.colorVar = varRef(block.json, 'colors', colorVar);
     if (textStyle) node.textStyle = varRef(block.json, 'texts', textStyle);
+    if (anim) node.anim = anim;
+    if (linkAnim) node.linkAnim = linkAnim;
+    if (linkMode === 'overlay') node.linkMode = 'overlay';
     if (color) node.color = color;
     if (kind === 'note') {
       if (!noteName) throw new Error('add_canvas_node kind=note needs noteName');
@@ -4959,12 +4987,13 @@ server.tool(
     } else if (kind === 'shape') {
       node.shape = shape || 'rect';
       node.text = text || '';
+      if (rich) node.rich = true;
       if (w == null) node.w = 160;
       if (h == null) node.h = 120;
     } else if (kind === 'label') {
       node.text = text || '';
       node.fontSize = fontSize || 22;
-      const tx = { font, weight, italic, underline, strike, lineHeight, letterSpacing, transform, align, wrap, plain };
+      const tx = { font, weight, italic, underline, strike, lineHeight, letterSpacing, transform, align, wrap, plain, rich };
       for (const [k, v] of Object.entries(tx)) if (v != null && v !== false) node[k] = v;
       if (!wrap) node.noWrap = true;
       if (w == null) node.w = Math.max(80, Math.round((text || '').length * (fontSize || 22) * 0.58) + 16);
@@ -5358,6 +5387,13 @@ server.tool(
     order: ORDER,
     link: z.string().nullable().optional().describe('prototype: id or title of a frame (group) to jump to when this is clicked while presenting'),
     ...VARS_SCHEMA,
+    imageFill: z.object({ url: z.string().optional(), sha: z.string().optional(), fit: z.enum(['cover', 'contain', 'fill']).optional() }).nullable().optional()
+      .describe('fill a closed shape / vector path with an image (url http(s)/data:, or sha of a blob from attach_image); fit cover (default, crops), contain or fill. null removes it.'),
+    anim: z.object({ enter: z.enum(['fade', 'up', 'down', 'left', 'right', 'scale', 'pop', 'blur']).optional(), dur: z.number().optional(), delay: z.number().optional(),
+      hover: z.enum(['lift', 'grow', 'dim', 'glow', 'press']).optional(), loop: z.enum(['pulse', 'spin', 'bounce', 'float', 'blink', 'wiggle']).optional() }).nullable().optional()
+      .describe('animation shown while presenting: entrance when its screen opens (with dur/delay ms), hover effect, loop'),
+    linkMode: z.enum(['screen', 'overlay']).optional().describe('overlay = open the linked frame on top as a modal (click outside closes it)'),
+    linkAnim: z.enum(['move', 'instant', 'dissolve', 'slide', 'smart']).optional().describe('prototype transition used when this link is clicked; smart = items with the same text / component piece fly to their new place'),
     clipTo: z.string().nullable().optional().describe('id of a closed shape (or vector path) that clips this drawing — like a Figma mask: what falls outside it is hidden. null removes the clipping.'),
     dx: z.number().optional(), dy: z.number().optional(),
     x: z.number().optional(), y: z.number().optional(), w: z.number().optional(), h: z.number().optional(),
@@ -5369,6 +5405,11 @@ server.tool(
     if (order === 'front') patch.z = nextCanvasZ(block.json);
     if (order === 'back') patch.z = minCanvasZ(block.json);
     for (const [k, kind] of [['fillVar', 'colors'], ['colorVar', 'colors'], ['textStyle', 'texts']]) if (typeof patch[k] === 'string') patch[k] = varRef(block.json, kind, patch[k]);
+    if (patch.imageFill) {
+      const src = patch.imageFill.url || (patch.imageFill.sha ? `edinot://blob/${patch.imageFill.sha}` : '');
+      if (!src) throw new Error('imageFill needs url or sha');
+      patch.imageFill = { src, fit: patch.imageFill.fit || 'cover' };
+    }
     if (typeof patch.link === 'string') {
       const g = (block.json.groups || []).find(x => x.id === patch.link) || (block.json.groups || []).find(x => String(x.title || '').toLowerCase() === patch.link.toLowerCase());
       if (!g) throw new Error(`link: frame not found: ${patch.link}`);
@@ -5471,16 +5512,98 @@ server.tool(
 );
 
 server.tool(
+  'list_component_library',
+  'List the shared component library (components published to be used in any canvas of the workspace).',
+  {},
+  async () => withSession(async (s) => json((s.getComponentLibrary() || []).map(e => ({ id: e.id, name: e.name, pieces: (e.nodes || []).length + (e.annos || []).length, updatedAt: e.updatedAt })))),
+);
+
+server.tool(
+  'publish_component_to_library',
+  'Publish (or update) a component of a canvas in the shared library so it can be inserted in ANY canvas. Instances '
+  + 'from the library follow later publishes of the same component.',
+  { name: z.string(), component: z.string() },
+  async ({ name, component }) => withSession(async (s) => {
+    const { block } = await ensureCanvas(s, name);
+    const c = findComponent(block.json, component);
+    const entry = libraryEntryFrom(block.json, c.id);
+    s.setComponentLibrary(publishToLibrary(s.getComponentLibrary(), entry));
+    return json({ ok: true, id: entry.id, name: entry.name });
+  }),
+);
+
+server.tool(
+  'insert_library_component',
+  'Place an instance of a shared-library component (by name or id) in a canvas at x/y; `texts` replaces its texts in order.',
+  { name: z.string(), component: z.string(), x: z.number().optional(), y: z.number().optional(), texts: z.array(z.string()).optional() },
+  async ({ name, component, x, y, texts }) => withSession(async (s) => {
+    const { f, content, block } = await ensureCanvas(s, name);
+    const lib = s.getComponentLibrary() || [];
+    const e = lib.find(k => k.id === component) || lib.find(k => String(k.name).toLowerCase() === component.toLowerCase());
+    if (!e) throw new Error(`library component not found: ${component}`);
+    const r = insertFromLibrary(block.json, e, { x: x ?? 0, y: y ?? 0 }, (p) => newCanvasId(p === 'n' ? 'n' : 'ann'));
+    let next = r.json;
+    if (texts && texts.length) {
+      const order = [...r.ids.nodes, ...r.ids.annos];
+      let k = 0;
+      const withText = (it) => (order.includes(it.id) && typeof it.text === 'string' && k < texts.length ? { ...it, text: texts[k++] } : it);
+      next = { ...next, nodes: (next.nodes || []).map(withText), annotations: (next.annotations || []).map(withText) };
+    }
+    await commitCanvas(s, f.id, next, { content, block });
+    return json({ ok: true, ...r.ids });
+  }),
+);
+
+server.tool(
+  'add_component_variant',
+  'Add a variant to a component (like a Figma component set): copies the main component next to it under a new '
+  + 'variant name (e.g. "Secundario", "Desactivado"); then restyle the copy with update tools. Instances can switch '
+  + 'variant with set_component_variant or insert_canvas_component variant.',
+  { name: z.string(), component: z.string(), variant: z.string() },
+  async ({ name, component, variant }) => withSession(async (s) => {
+    const { f, content, block } = await ensureCanvas(s, name);
+    const c = findComponent(block.json, component);
+    const r = addVariant(block.json, c.id, variant, (p) => newCanvasId(p === 'n' ? 'n' : 'ann'));
+    await commitCanvas(s, f.id, r.json, { content, block });
+    const ids = [...(r.json.nodes || []), ...(r.json.annotations || [])].filter(x => x.cmain === r.id).map(x => x.id);
+    return json({ ok: true, componentId: r.id, itemIds: ids });
+  }),
+);
+
+server.tool(
+  'set_component_variant',
+  'Switch an instance (pass the id of any of its items) to another variant of its component set, keeping its place and texts.',
+  { name: z.string(), itemId: z.string(), variant: z.string() },
+  async ({ name, itemId, variant }) => withSession(async (s) => {
+    const { f, content, block } = await ensureCanvas(s, name);
+    const it = [...(block.json.nodes || []), ...(block.json.annotations || [])].find(x => x.id === itemId);
+    if (!it || !it.cinst) throw new Error('that item is not part of a component instance');
+    const v = variantsOf(block.json, it.cinst).find(x => x.variant.toLowerCase() === variant.toLowerCase() || x.id === variant);
+    if (!v) throw new Error(`variant not found: ${variant} (have: ${variantsOf(block.json, it.cinst).map(x => x.variant).join(', ')})`);
+    await commitCanvas(s, f.id, switchVariant(block.json, it.grp, v.id, (p) => newCanvasId(p === 'n' ? 'n' : 'ann')), { content, block });
+    return json({ ok: true });
+  }),
+);
+
+server.tool(
   'insert_canvas_component',
   'Place an instance of a component (by name or id) with its top-left corner at x/y. `texts` replaces the texts of '
   + 'the instance in order (e.g. ["Cancelar"] for a button). Returns the new ids.',
-  { name: z.string(), component: z.string(), x: z.number().optional(), y: z.number().optional(), texts: z.array(z.string()).optional() },
-  async ({ name, component, x, y, texts }) => withSession(async (s) => {
+  { name: z.string(), component: z.string(), x: z.number().optional(), y: z.number().optional(), texts: z.array(z.string()).optional(), variant: z.string().optional() },
+  async ({ name, component, x, y, texts, variant }) => withSession(async (s) => {
     const { f, content, block } = await ensureCanvas(s, name);
     const c = listComponents(block.json).find(k => k.id === component) || listComponents(block.json).find(k => k.name.toLowerCase() === component.toLowerCase());
     if (!c) throw new Error(`component not found: ${component}`);
     const r = insertInstance(block.json, c.id, x != null && y != null ? { x, y } : null, (p) => newCanvasId(p === 'n' ? 'n' : 'ann'));
     let next = r.json;
+    if (variant) {
+      const v = variantsOf(next, c.id).find(x => x.variant.toLowerCase() === variant.toLowerCase());
+      if (!v) throw new Error(`variant not found: ${variant}`);
+      next = syncInstances(switchVariant(next, r.ids.grp, v.id, (p) => newCanvasId(p === 'n' ? 'n' : 'ann')));
+      const g = r.ids.grp;
+      r.ids.nodes = (next.nodes || []).filter(n => n.grp === g).map(n => n.id);
+      r.ids.annos = (next.annotations || []).filter(a => a.grp === g).map(a => a.id);
+    }
     if (texts && texts.length) {
       const order = [...r.ids.nodes, ...r.ids.annos];
       let k = 0;
@@ -5513,6 +5636,26 @@ server.tool(
     const annotations = res ? [...rest, { ...res, id }] : rest;
     await commitCanvas(s, f.id, { ...block.json, annotations }, { content, block });
     return json({ ok: true, id: res ? id : null, empty: !res });
+  }),
+);
+
+server.tool(
+  'export_frame_html',
+  'Turn a screen (frame/group, by title or id) into a standalone HTML + CSS page: texts with their typography, '
+  + 'boxes with background/gradient/border/radius/shadows/blur/image, other drawings as inline SVG, all absolutely '
+  + 'positioned in stack order. Use it to go from a design to code; save it with `path` (absolute .html) or get the HTML back.',
+  { name: z.string(), frame: z.string(), path: z.string().optional() },
+  async ({ name, frame, path: outPath }) => withSession(async (s) => {
+    const { block } = await ensureCanvas(s, name);
+    const g = (block.json.groups || []).find(x => x.id === frame) || (block.json.groups || []).find(x => String(x.title || '').toLowerCase() === frame.toLowerCase());
+    if (!g) throw new Error(`frame not found: ${frame}`);
+    const html = frameToHtml(block.json, g);
+    if (outPath) {
+      const fsP = await import('node:fs/promises');
+      await fsP.writeFile(outPath, html, 'utf8');
+      return json({ ok: true, path: outPath, bytes: html.length });
+    }
+    return { content: [{ type: 'text', text: html }] };
   }),
 );
 
@@ -5952,6 +6095,11 @@ server.tool(
     order: ORDER,
     link: z.string().nullable().optional().describe('prototype: id or title of a frame (group) to jump to when this is clicked while presenting'),
     ...VARS_SCHEMA,
+    anim: z.object({ enter: z.enum(['fade', 'up', 'down', 'left', 'right', 'scale', 'pop', 'blur']).optional(), dur: z.number().optional(), delay: z.number().optional(),
+      hover: z.enum(['lift', 'grow', 'dim', 'glow', 'press']).optional(), loop: z.enum(['pulse', 'spin', 'bounce', 'float', 'blink', 'wiggle']).optional() }).nullable().optional()
+      .describe('animation shown while presenting: entrance when its screen opens (with dur/delay ms), hover effect, loop'),
+    linkMode: z.enum(['screen', 'overlay']).optional().describe('overlay = open the linked frame on top as a modal (click outside closes it)'),
+    linkAnim: z.enum(['move', 'instant', 'dissolve', 'slide', 'smart']).optional().describe('prototype transition used when this link is clicked; smart = items with the same text / component piece fly to their new place'),
     shape: z.enum(['rect', 'ellipse', 'diamond', 'hexagon', 'cylinder', 'triangle', 'cloud', 'callout', 'star']).optional(),
     fontSize: z.number().min(6).max(200).optional(),
     font: z.string().nullable().optional().describe("label text: 'sans' (Inter) | 'display' (Instrument Sans) | 'serif' (Newsreader) | 'mono' (JetBrains Mono) or any installed family"),
@@ -5962,6 +6110,7 @@ server.tool(
     align: z.enum(['left', 'center', 'right', 'justify']).nullable().optional(),
     wrap: z.boolean().nullable().optional().describe('label: fixed-width box (w) that wraps lines'),
     plain: z.boolean().nullable().optional().describe('label: design text (no padding/shadow, weight 400 by default)'),
+    rich: z.boolean().nullable().optional().describe('mixed styles inside the text: **bold**, *italic*, __underline__, ~~strike~~, `code`, {#hex|colour}, {+24|size}'),
     x: z.number().optional(),
     y: z.number().optional(),
     w: z.number().optional(),
@@ -5972,6 +6121,11 @@ server.tool(
     if (order === 'front') patch.z = nextCanvasZ(block.json);
     if (order === 'back') patch.z = minCanvasZ(block.json);
     for (const [k, kind] of [['fillVar', 'colors'], ['colorVar', 'colors'], ['textStyle', 'texts']]) if (typeof patch[k] === 'string') patch[k] = varRef(block.json, kind, patch[k]);
+    if (patch.imageFill) {
+      const src = patch.imageFill.url || (patch.imageFill.sha ? `edinot://blob/${patch.imageFill.sha}` : '');
+      if (!src) throw new Error('imageFill needs url or sha');
+      patch.imageFill = { src, fit: patch.imageFill.fit || 'cover' };
+    }
     if (typeof patch.link === 'string') {
       const g = (block.json.groups || []).find(x => x.id === patch.link) || (block.json.groups || []).find(x => String(x.title || '').toLowerCase() === patch.link.toLowerCase());
       if (!g) throw new Error(`link: frame not found: ${patch.link}`);
@@ -6054,6 +6208,8 @@ server.tool(
     title: z.string().optional(),
     color: z.string().nullable().optional(),
     order: z.number().nullable().optional(),
+    scroll: z.boolean().nullable().optional().describe('scrollable while presenting: content placed below the frame is scrolled with the wheel'),
+    grid: z.object({ columns: z.number().min(1).max(24), gutter: z.number().min(0).optional(), margin: z.number().min(0).optional() }).nullable().optional().describe('column layout grid shown inside the frame while editing (like a Figma layout grid)'),
     layout: z.object({ dir: z.enum(['column', 'row']), gap: z.number().min(0).optional(), pad: z.number().min(0).optional(), align: z.enum(['start', 'center', 'end']).optional(), hug: z.boolean().optional() }).nullable().optional().describe('auto layout: the frame places its content in a column or row with gap/padding (like Figma auto layout / CSS flex); items are ordered by their current position; hug = frame fits its content. null turns it off.'),
     x: z.number().optional(),
     y: z.number().optional(),
