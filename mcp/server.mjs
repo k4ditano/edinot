@@ -9,6 +9,12 @@
 // Each tool call opens a short-lived Yjs session, performs ops, closes.
 // CRDT semantics: writes merge with any concurrent edits from app / other peers.
 
+import { booleanOp, canBoolean } from '../shared/canvas-boolean.js';
+import { createComponent, insertInstance, syncInstances, listComponents } from '../editor/canvas/components.js';
+import { applyAutoLayout } from '../editor/canvas/autolayout.js';
+import { itemCssText } from '../shared/canvas-css.js';
+import { canMask } from '../shared/canvas-mask.js';
+import { svgToCanvas, normalizePath, pathBbox } from '../shared/svg-import.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -184,7 +190,7 @@ const TOOLS_WITH_OWN_ACTION = new Set([
   'create_from_template',
   'add_table_row', 'update_table_row', 'delete_table_row',
   'canvas_from_text', 'create_canvas', 'add_canvas_node',
-  'draw_freehand_on_canvas', 'add_canvas_shape',
+  'draw_freehand_on_canvas', 'add_canvas_shape', 'update_canvas_annotation', 'import_svg_to_canvas', 'group_canvas_items', 'set_canvas_variables', 'create_canvas_component', 'insert_canvas_component', 'boolean_canvas_shapes',
   'create_form', 'update_form', 'delete_form',
 ]);
 
@@ -218,6 +224,8 @@ function friendlyToolPayload(name, args) {
     case 'move_canvas_node':     return { target: str(a.name), where: '' };
     case 'connect_canvas_nodes': return { target: str(a.name), where: '' };
     case 'add_canvas_shape':     return { target: str(a.shape) + ' → ' + str(a.name), where: '' };
+    case 'update_canvas_annotation': return { target: str(a.name), where: '' };
+    case 'import_svg_to_canvas': return { target: 'SVG → ' + str(a.name), where: '' };
     case 'focus_canvas_node':    return { target: str(a.name), where: '' };
     case 'present_in_canvas':    return { target: str(a.name), where: '' };
     case 'canvas_animate':       return { target: str(a.name), where: '' };
@@ -4337,7 +4345,7 @@ server.tool(
     // A canvas keeps its live structure apart from the text: rebuild the copy's from the source's.
     if (findCanvasBlock(content)) {
       const { content: srcContent, block } = await ensureCanvas(s, f.name);
-      await s.canvasCommit(copy.id, block.json, { content: srcContent, block });
+      await commitCanvas(s, copy.id, block.json, { content: srcContent, block });
     }
     s.publishMcpAction({ kind: 'create', note: copy.name, noteId: copy.id, vault: s.vaultName(copy.vaultId), vaultId: copy.vaultId || 'default', folderId: copy.folderId || null, bytes: content.length });
     return json(withHints({ ok: true, id: copy.id, name: copy.name, copiedFrom: f.name, vaultId: copy.vaultId || 'default', vault: s.vaultName(copy.vaultId), folderId: copy.folderId || null, bytes: content.length },
@@ -4423,7 +4431,7 @@ server.tool(
     }
     const removed = edges.filter(drop);
     if (!removed.length) throw new Error(edgeId ? `edge not found: ${edgeId}` : `no connector between ${from} and ${to} — read_canvas lists the edges`);
-    await s.canvasCommit(f.id, { ...block.json, edges: edges.filter(e => !drop(e)) }, { content, block });
+    await commitCanvas(s, f.id, { ...block.json, edges: edges.filter(e => !drop(e)) }, { content, block });
     return json({ ok: true, removed: removed.map(e => ({ id: e.id, from: e.from, to: e.to })) });
   }),
 );
@@ -4569,6 +4577,43 @@ function ytId(url) {
   return m ? m[1] : null;
 }
 
+// Siguiente puesto en el orden de apilado (como en Figma, lo último que se añade queda encima). Se mira tanto a
+// fichas como a dibujos, porque comparten el mismo orden.
+// Orden efectivo, igual que en la app (editor/canvas/zorder.js): un dibujo sin `z` va encima de todas las fichas
+// (o debajo, si es de la capa 'back').
+const effZ = (json) => [
+  ...(json.nodes || []).map((n, i) => (n.z != null ? n.z : i)),
+  ...(json.annotations || []).map((a, i) => (typeof a.z === 'number' ? a.z : (a.layer === 'back' ? -1e9 + i : 1e9 + i))),
+];
+function nextCanvasZ(json) {
+  return Math.ceil(Math.max(0, ...effZ(json))) + 1;
+}
+
+function minCanvasZ(json) {
+  return Math.floor(Math.min(0, ...effZ(json))) - 1;
+}
+const ORDER = z.enum(['front', 'back']).optional().describe('layer order: front = on top of everything, back = behind everything');
+
+// Una variable del diseño por id o por nombre (sin distinguir mayúsculas).
+function varRef(json, kind, ref) {
+  if (ref == null) return ref;
+  const list = (json.vars && json.vars[kind]) || [];
+  const v = list.find(x => x.id === ref) || list.find(x => String(x.name || '').toLowerCase() === String(ref).toLowerCase());
+  if (!v) throw new Error(`${kind === 'colors' ? 'colour' : 'text style'} variable not found: ${ref} — define it with set_canvas_variables`);
+  return v.id;
+}
+const VARS_SCHEMA = {
+  fillVar: z.string().nullable().optional().describe('link the fill (or a card colour) to a colour variable, by name or id'),
+  colorVar: z.string().nullable().optional().describe('link the stroke / text colour to a colour variable, by name or id'),
+  textStyle: z.string().nullable().optional().describe('labels: link to a text style variable, by name or id'),
+};
+
+// Toda escritura de un canvas pasa por aquí: las instancias de componentes se rehacen desde su principal y los
+// marcos con auto layout recolocan su contenido, también cuando la app está cerrada.
+function commitCanvas(s, id, next, ctx) {
+  return s.canvasCommit(id, applyAutoLayout(syncInstances(next)), ctx);
+}
+
 async function ensureCanvas(s, name) {
   const f = s.findFileByName(name);
   if (!f) throw new Error(`note not found: ${name}`);
@@ -4586,6 +4631,7 @@ async function ensureCanvas(s, name) {
       edges: Array.isArray(snap.edges) ? snap.edges : [],
       groups: Array.isArray(snap.groups) ? snap.groups : [],
       annotations: Array.isArray(snap.annotations) ? snap.annotations : [],
+      ...(snap.vars ? { vars: snap.vars } : {}),
     };
   }
   return { f, content, block };
@@ -4832,7 +4878,10 @@ server.tool(
 
 server.tool(
   'add_canvas_node',
-  'Append a node to the canvas. `kind`: note | text | url | image | video | query | attachment. '
+  'Append a node to the canvas. `kind`: note | text | url | image | video | query | attachment | shape | label. '
+  + '`shape` = a figure with centred text inside (org charts, flowcharts): pass `shape` '
+  + '(rect, ellipse, diamond, hexagon, cylinder, triangle, cloud, callout, star), `text` and `color` (fill + border). '
+  + '`label` = free text on the board: `text`, optional `fontSize`, `color`. '
   + 'A YouTube `url` (with kind url or video) becomes an embedded player. '
   + 'For `note` pass `noteName` (and we store both noteName + noteId so the '
   + 'tile survives renames). For `image` pass ONE of: `path` (absolute image '
@@ -4849,7 +4898,18 @@ server.tool(
   + 'do not leave the user staring at a static board.',
   {
     name: z.string(),
-    kind: z.enum(['note', 'text', 'url', 'image', 'video', 'query', 'attachment']),
+    kind: z.enum(['note', 'text', 'url', 'image', 'video', 'query', 'attachment', 'shape', 'label']),
+    shape: z.enum(['rect', 'ellipse', 'diamond', 'hexagon', 'cylinder', 'triangle', 'cloud', 'callout', 'star']).optional(),
+    fontSize: z.number().min(6).max(200).optional(),
+    font: z.string().optional().describe("label text: 'sans' (Inter) | 'display' (Instrument Sans) | 'serif' (Newsreader) | 'mono' (JetBrains Mono) or any installed family"),
+    weight: z.number().min(100).max(900).optional(),
+    italic: z.boolean().optional(), underline: z.boolean().optional(), strike: z.boolean().optional(),
+    lineHeight: z.number().min(0.5).max(4).optional(), letterSpacing: z.number().min(-10).max(50).optional(),
+    transform: z.enum(['upper', 'lower', 'title']).optional(),
+    align: z.enum(['left', 'center', 'right', 'justify']).optional(),
+    wrap: z.boolean().optional().describe('label: fixed-width box (w) that wraps lines'),
+    plain: z.boolean().optional().describe('label: design text (no padding/shadow, weight 400 by default)'),
+    ...VARS_SCHEMA,
     noteName: z.string().optional(),
     text: z.string().optional(),
     url: z.string().optional(),
@@ -4866,7 +4926,7 @@ server.tool(
     h: z.number().optional(),
     color: z.string().optional(),
   },
-  async ({ name, kind, noteName, text, url, sha, path: filePath, data, filename, mime, query, sticky, x, y, w, h, color }) => withSession(async (s) => {
+  async ({ name, kind, shape, fontSize, font, weight, italic, underline, strike, lineHeight, letterSpacing, transform, align, wrap, plain, fillVar, colorVar, textStyle, noteName, text, url, sha, path: filePath, data, filename, mime, query, sticky, x, y, w, h, color }) => withSession(async (s) => {
     // Resolve data/url into an uploaded blob (same pipeline as attach_image).
     const uploadBlobInput = async (fallbackName) => {
       const cfg = resolveCfg();
@@ -4885,6 +4945,10 @@ server.tool(
     const { f, content, block } = await ensureCanvas(s, name);
     const id = newCanvasId('n');
     const node = { id, kind, x: x != null ? x : 80, y: y != null ? y : 80, w: w || 240, h: h || 140 };
+    node.z = nextCanvasZ(block.json);
+    if (fillVar) node.fillVar = varRef(block.json, 'colors', fillVar);
+    if (colorVar) node.colorVar = varRef(block.json, 'colors', colorVar);
+    if (textStyle) node.textStyle = varRef(block.json, 'texts', textStyle);
     if (color) node.color = color;
     if (kind === 'note') {
       if (!noteName) throw new Error('add_canvas_node kind=note needs noteName');
@@ -4892,6 +4956,19 @@ server.tool(
       if (!target) throw new Error(`note not found: ${noteName}`);
       node.noteId = target.id;
       node.noteName = target.name.replace(/\.(md|markdown|txt)$/i, '');
+    } else if (kind === 'shape') {
+      node.shape = shape || 'rect';
+      node.text = text || '';
+      if (w == null) node.w = 160;
+      if (h == null) node.h = 120;
+    } else if (kind === 'label') {
+      node.text = text || '';
+      node.fontSize = fontSize || 22;
+      const tx = { font, weight, italic, underline, strike, lineHeight, letterSpacing, transform, align, wrap, plain };
+      for (const [k, v] of Object.entries(tx)) if (v != null && v !== false) node[k] = v;
+      if (!wrap) node.noWrap = true;
+      if (w == null) node.w = Math.max(80, Math.round((text || '').length * (fontSize || 22) * 0.58) + 16);
+      if (h == null) node.h = Math.round((fontSize || 22) * 1.6);
     } else if (kind === 'text') {
       node.text = text || '';
       if (sticky) {
@@ -4948,7 +5025,7 @@ server.tool(
     // Sin x/y se busca un hueco libre: antes todos los nodos caían en (80,80), uno encima de otro.
     if (x == null && y == null) { const p = srvFreeSpot(block.json.nodes, node.w, node.h); node.x = p.x; node.y = p.y; }
     const next = { ...block.json, nodes: [...block.json.nodes, node] };
-    await s.canvasCommit(f.id, next, { content, block });
+    await commitCanvas(s, f.id, next, { content, block });
     s.publishMcpAction({ kind: 'canvas_add_node', note: f.name, noteId: f.id, vault: s.vaultName(f.vaultId), nodeKind: kind, nodeId: id });
     return json(withHints(
       { ok: true, id, node },
@@ -5013,7 +5090,7 @@ server.tool(
       return node;
     });
     const next = { ...block.json, nodes: [...block.json.nodes, ...created] };
-    await s.canvasCommit(f.id, next, { content, block });
+    await commitCanvas(s, f.id, next, { content, block });
     s.publishMcpAction({ kind: 'canvas_add_node', note: f.name, noteId: f.id, vault: s.vaultName(f.vaultId), nodeKind: 'sticky', count: created.length });
     return json(withHints(
       { ok: true, ids: created.map(n => n.id), nodes: created },
@@ -5042,7 +5119,7 @@ server.tool(
       ? { ...n, ...(x != null ? { x } : {}), ...(y != null ? { y } : {}), ...(w != null ? { w } : {}), ...(h != null ? { h } : {}) }
       : n);
     if (!nodes.find(n => n.id === nodeId)) throw new Error(`node not found: ${nodeId}`);
-    await s.canvasCommit(f.id, { ...block.json, nodes }, { content, block });
+    await commitCanvas(s, f.id, { ...block.json, nodes }, { content, block });
     return json({ ok: true });
   }),
 );
@@ -5090,7 +5167,7 @@ server.tool(
     if (end_head) edge.endHead = end_head;
     if (from_side) edge.fromSide = from_side;
     if (to_side) edge.toSide = to_side;
-    await s.canvasCommit(f.id, { ...block.json, edges: [...edges, edge] }, { content, block });
+    await commitCanvas(s, f.id, { ...block.json, edges: [...edges, edge] }, { content, block });
     return json({ ok: true, edge });
   }),
 );
@@ -5127,9 +5204,10 @@ server.tool(
     if (opacity != null) ann.opacity = opacity;
     if (fill) ann.fill = fill;
     if (label) { ann.label = label; if (labelX != null) ann.labelX = labelX; if (labelY != null) ann.labelY = labelY; }
+    ann.z = nextCanvasZ(block.json);
     const annotations = Array.isArray(block.json.annotations) ? block.json.annotations : [];
     const next = { ...block.json, annotations: [...annotations, ann] };
-    await s.canvasCommit(f.id, next, { content, block });
+    await commitCanvas(s, f.id, next, { content, block });
     s.publishMcpAction({ kind: 'canvas_annotate', note: f.name, noteId: f.id, vault: s.vaultName(f.vaultId), annotationId: id });
     return json(withHints({ ok: true, id, annotation: ann }, [
       { tool: 'focus_note', args: { name: f.name }, reason: 'open the canvas so the user sees the annotation you just drew' },
@@ -5160,8 +5238,24 @@ server.tool(
     opacity: z.number().min(0).max(1).optional(),
     text: z.string().max(200).optional(),
     rot: z.number().optional(),
+    rx: z.number().min(0).optional().describe('rect only: corner radius'),
+    gradient: z.object({
+      type: z.enum(['linear', 'radial']),
+      x1: z.number().optional(), y1: z.number().optional(), x2: z.number().optional(), y2: z.number().optional(),
+      cx: z.number().optional(), cy: z.number().optional(), r: z.number().optional(),
+      stops: z.array(z.object({ offset: z.number().min(0).max(1), color: z.string(), opacity: z.number().min(0).max(1).optional() })).min(2),
+    }).describe('Gradient fill. Coordinates are fractions of the shape box (0..1): linear x1,y1→x2,y2 (default left→right); radial cx,cy,r (default 0.5).').optional(),
+    shadow: z.object({ dx: z.number().optional(), dy: z.number().optional(), blur: z.number().min(0).optional(), color: z.string().optional(), opacity: z.number().min(0).max(1).optional() })
+      .describe('Drop shadow, e.g. { dy: 8, blur: 12, color: "#000", opacity: 0.18 }.').optional(),
+    innerShadow: z.object({ dx: z.number().optional(), dy: z.number().optional(), blur: z.number().min(0).optional(), color: z.string().optional(), opacity: z.number().min(0).max(1).optional() }).optional().describe('inner shadow (inset)'),
+    blur: z.number().min(0).max(200).optional().describe('layer blur in px'),
+    bgBlur: z.number().min(0).max(200).optional().describe('background blur ("glass", frosted panels): blurs what is behind; use a semi-transparent fill like rgba(255,255,255,.35)'),
+    corners: z.array(z.number().min(0)).length(4).optional().describe('rect: radius per corner [topLeft, topRight, bottomRight, bottomLeft]'),
+    sides: z.object({ t: z.boolean().optional(), r: z.boolean().optional(), b: z.boolean().optional(), l: z.boolean().optional() }).optional().describe('rect: draw the border only on these sides, e.g. { b: true } for a bottom divider'),
+    strokeAlign: z.enum(['center', 'inside', 'outside']).optional().describe('rect: where the border sits relative to the edge'),
+    fillVar: VARS_SCHEMA.fillVar, colorVar: VARS_SCHEMA.colorVar,
   },
-  async ({ name, shape, x, y, w, h, x1, y1, x2, y2, color, strokeWidth, fill, opacity, text, rot }) => withSession(async (s) => {
+  async ({ name, shape, x, y, w, h, x1, y1, x2, y2, color, strokeWidth, fill, opacity, text, rot, rx, gradient, shadow, innerShadow, blur, bgBlur, corners, sides, strokeAlign, fillVar, colorVar }) => withSession(async (s) => {
     const { f, content, block } = await ensureCanvas(s, name);
     const id = newCanvasId('ann');
     const ann = { id, kind: 'shape', shape };
@@ -5176,13 +5270,20 @@ server.tool(
       ann.fill = fill || 'none';
       if (text) ann.text = text;
       if (rot != null) ann.rot = rot;
+      if (rx != null && shape === 'rect') ann.rx = rx;
+      if (gradient) { ann.gradient = gradient; if (!fill) ann.fill = gradient.stops[0].color; }
     }
     ann.color = color || '#1f2937';
     ann.strokeWidth = strokeWidth != null ? strokeWidth : 2;
     if (opacity != null) ann.opacity = opacity;
+    if (shadow) ann.shadow = shadow;
+    for (const [k, v] of Object.entries({ innerShadow, blur, bgBlur, corners, sides, strokeAlign })) if (v != null) ann[k] = v;
+    if (fillVar) ann.fillVar = varRef(block.json, 'colors', fillVar);
+    if (colorVar) ann.colorVar = varRef(block.json, 'colors', colorVar);
+    ann.z = nextCanvasZ(block.json);
     const annotations = Array.isArray(block.json.annotations) ? block.json.annotations : [];
     const next = { ...block.json, annotations: [...annotations, ann] };
-    await s.canvasCommit(f.id, next, { content, block });
+    await commitCanvas(s, f.id, next, { content, block });
     s.publishMcpAction({ kind: 'canvas_annotate', note: f.name, noteId: f.id, vault: s.vaultName(f.vaultId), annotationId: id });
     return json(withHints({ ok: true, id, annotation: ann }, [
       { tool: 'focus_note', args: { name: f.name }, reason: 'open the canvas so the user sees the shape you just added' },
@@ -5212,8 +5313,305 @@ server.tool(
     const before = Array.isArray(block.json.annotations) ? block.json.annotations : [];
     const annotations = before.filter(a => a.id !== annotationId);
     if (annotations.length === before.length) throw new Error(`annotation not found: ${annotationId}`);
-    await s.canvasCommit(f.id, { ...block.json, annotations }, { content, block });
+    await commitCanvas(s, f.id, { ...block.json, annotations }, { content, block });
     return json({ ok: true, removed: annotationId });
+  }),
+);
+
+server.tool(
+  'update_canvas_annotation',
+  'Edit a drawing on the canvas — one the user drew by hand (pen strokes, shapes, lines) or one you added. '
+  + 'Get ids with list_canvas_annotations (or read_canvas). Style: color (stroke / ink), fill (closed shapes and '
+  + 'vector paths; "none" for none), strokeWidth (shapes, lines and vector paths — a hand pen stroke keeps its own ink width), opacity, dash (solid|dashed|dotted), text (inside closed shapes), '
+  + 'rot (degrees, closed shapes). Geometry: dx/dy move it by that much (any kind, including hand strokes); '
+  + 'x/y/w/h resize a closed shape; x1/y1/x2/y2 move the ends of a line/arrow; `d` replaces a vector path. '
+  + '`gradient` and `shadow` add a gradient fill / drop shadow (null removes them); `size` changes the ink width of a hand pen stroke. '
+  + '`clipTo` clips the drawing to another shape (mask): e.g. a header image inside a rounded phone screen. '
+  + 'Pass null to clear a style field. Prefer this over delete + redraw.',
+  {
+    name: z.string(),
+    annotationId: z.string(),
+    color: z.string().nullable().optional(),
+    fill: z.string().nullable().optional(),
+    strokeWidth: z.number().min(0.5).max(60).optional(),
+    opacity: z.number().min(0).max(1).nullable().optional(),
+    dash: z.enum(['solid', 'dashed', 'dotted']).optional(),
+    text: z.string().max(400).nullable().optional(),
+    rot: z.number().nullable().optional(),
+    rx: z.number().min(0).nullable().optional(),
+    gradient: z.object({
+      type: z.enum(['linear', 'radial']),
+      x1: z.number().optional(), y1: z.number().optional(), x2: z.number().optional(), y2: z.number().optional(),
+      cx: z.number().optional(), cy: z.number().optional(), r: z.number().optional(),
+      stops: z.array(z.object({ offset: z.number().min(0).max(1), color: z.string(), opacity: z.number().min(0).max(1).optional() })).min(2),
+    }).describe('Gradient fill. Coordinates are fractions of the shape box (0..1): linear x1,y1→x2,y2 (default left→right); radial cx,cy,r (default 0.5).').nullable().optional(),
+    shadow: z.object({ dx: z.number().optional(), dy: z.number().optional(), blur: z.number().min(0).optional(), color: z.string().optional(), opacity: z.number().min(0).max(1).optional() })
+      .describe('Drop shadow, e.g. { dy: 8, blur: 12, color: "#000", opacity: 0.18 }.').nullable().optional(),
+    size: z.number().min(0.5).max(80).optional().describe('hand pen strokes only: ink width (the stroke is rebuilt from its points)'),
+    innerShadow: z.object({ dx: z.number().optional(), dy: z.number().optional(), blur: z.number().min(0).optional(), color: z.string().optional(), opacity: z.number().min(0).max(1).optional() }).nullable().optional().describe('inner shadow (inset)'),
+    blur: z.number().min(0).max(200).nullable().optional().describe('layer blur in px'),
+    bgBlur: z.number().min(0).max(200).nullable().optional().describe('background blur ("glass", frosted panels): blurs what is behind; use a semi-transparent fill like rgba(255,255,255,.35)'),
+    corners: z.array(z.number().min(0)).length(4).nullable().optional().describe('rect: radius per corner [topLeft, topRight, bottomRight, bottomLeft]'),
+    sides: z.object({ t: z.boolean().optional(), r: z.boolean().optional(), b: z.boolean().optional(), l: z.boolean().optional() }).nullable().optional().describe('rect: draw the border only on these sides, e.g. { b: true } for a bottom divider'),
+    strokeAlign: z.enum(['center', 'inside', 'outside']).nullable().optional().describe('rect: where the border sits relative to the edge'),
+
+    order: ORDER,
+    link: z.string().nullable().optional().describe('prototype: id or title of a frame (group) to jump to when this is clicked while presenting'),
+    ...VARS_SCHEMA,
+    clipTo: z.string().nullable().optional().describe('id of a closed shape (or vector path) that clips this drawing — like a Figma mask: what falls outside it is hidden. null removes the clipping.'),
+    dx: z.number().optional(), dy: z.number().optional(),
+    x: z.number().optional(), y: z.number().optional(), w: z.number().optional(), h: z.number().optional(),
+    x1: z.number().optional(), y1: z.number().optional(), x2: z.number().optional(), y2: z.number().optional(),
+    d: z.string().optional(),
+  },
+  async ({ name, annotationId, dx, dy, dash, size, order, ...patch }) => withSession(async (s) => {
+    const { f, content, block } = await ensureCanvas(s, name);
+    if (order === 'front') patch.z = nextCanvasZ(block.json);
+    if (order === 'back') patch.z = minCanvasZ(block.json);
+    for (const [k, kind] of [['fillVar', 'colors'], ['colorVar', 'colors'], ['textStyle', 'texts']]) if (typeof patch[k] === 'string') patch[k] = varRef(block.json, kind, patch[k]);
+    if (typeof patch.link === 'string') {
+      const g = (block.json.groups || []).find(x => x.id === patch.link) || (block.json.groups || []).find(x => String(x.title || '').toLowerCase() === patch.link.toLowerCase());
+      if (!g) throw new Error(`link: frame not found: ${patch.link}`);
+      patch.link = g.id;
+    }
+    const list = Array.isArray(block.json.annotations) ? block.json.annotations : [];
+    if (patch.clipTo) {
+      const m = list.find(x => x.id === patch.clipTo);
+      if (!m) throw new Error(`clipTo: annotation not found: ${patch.clipTo}`);
+      if (!canMask(m)) throw new Error('clipTo must be a closed shape or a vector path');
+    }
+    if (patch.clipTo === null) patch.clip = null;
+    let found = null;
+    const annotations = list.map(a => {
+      if (a.id !== annotationId) return a;
+      const next = { ...a };
+      for (const [k, v] of Object.entries(patch)) {
+        if (v === undefined) continue;
+        if (v === null) delete next[k]; else next[k] = v;
+      }
+      if (dash) { if (dash === 'solid') delete next.dash; else next.dash = dash; }
+      // A pen stroke keeps its ink in `fill`: recolouring it means both.
+      if (a.kind === 'path' && a.variant === 'pen' && typeof patch.color === 'string') next.fill = patch.color;
+      if (dx || dy) { next.ox = (next.ox || 0) + (dx || 0); next.oy = (next.oy || 0) + (dy || 0); }
+      // Grosor de un trazo a mano: se guarda el nuevo y se quita el contorno viejo; la app lo rehace desde los puntos.
+      if (size != null && a.kind === 'path' && Array.isArray(a.pts) && a.pts.length) {
+        next.size = size; delete next.d;
+        if (a.variant === 'highlighter') next.strokeWidth = size * 4;
+      }
+      if (patch.gradient && (patch.fill === undefined)) next.fill = patch.gradient.stops[0].color;
+      if (next.kind === 'shape') {
+        if (next.shape === 'line' || next.shape === 'arrow') next.bbox = { x: Math.min(next.x1, next.x2), y: Math.min(next.y1, next.y2), w: Math.abs(next.x2 - next.x1), h: Math.abs(next.y2 - next.y1) };
+        else if (next.w != null) next.bbox = { x: next.x, y: next.y, w: next.w, h: next.h };
+      } else if (next.kind === 'path' && patch.d) {
+        const bb = pathBbox(normalizePath(patch.d));
+        if (bb) next.bbox = bb;
+        delete next.pts; delete next.variant; // ahora es un trazo vectorial
+      }
+      found = next;
+      return next;
+    });
+    if (!found) throw new Error(`annotation not found: ${annotationId}`);
+    await commitCanvas(s, f.id, { ...block.json, annotations }, { content, block });
+    s.publishMcpAction({ kind: 'canvas_annotate', note: f.name, noteId: f.id, vault: s.vaultName(f.vaultId), annotationId });
+    return json(withHints({ ok: true, annotation: found }, [
+      { tool: 'canvas_screenshot', args: { name: f.name }, reason: 'look at the result before moving on' },
+    ]));
+  }),
+);
+
+server.tool(
+  'set_canvas_variables',
+  'Define the design variables of a canvas (like Figma styles): named colours and text styles. Items link to them '
+  + 'with fillVar / colorVar / textStyle (by name) in add/update tools, and change everywhere when the variable '
+  + 'changes. Entries are merged by name (an existing name is updated); replace: true starts from scratch. '
+  + 'Text style keys: font, fontSize, weight, lineHeight, letterSpacing, italic, transform.',
+  {
+    name: z.string(),
+    colors: z.array(z.object({ name: z.string(), value: z.string() })).optional(),
+    texts: z.array(z.object({ name: z.string(), style: z.object({
+      font: z.string().optional(), fontSize: z.number().optional(), weight: z.number().optional(), lineHeight: z.number().optional(),
+      letterSpacing: z.number().optional(), italic: z.boolean().optional(), transform: z.enum(['upper', 'lower', 'title']).optional(),
+    }) })).optional(),
+    replace: z.boolean().optional(),
+  },
+  async ({ name, colors = [], texts = [], replace }) => withSession(async (s) => {
+    const { f, content, block } = await ensureCanvas(s, name);
+    const cur = replace ? { colors: [], texts: [] } : { colors: [], texts: [], ...(block.json.vars || {}) };
+    const merge = (list, items, prefix, mk) => {
+      const out = [...list];
+      for (const it of items) {
+        const i = out.findIndex(x => String(x.name).toLowerCase() === it.name.toLowerCase());
+        if (i >= 0) out[i] = { ...out[i], ...mk(it) };
+        else out.push({ id: prefix + Date.now().toString(36).slice(-5) + Math.random().toString(36).slice(2, 5), ...mk(it) });
+      }
+      return out;
+    };
+    const vars = {
+      colors: merge(cur.colors || [], colors, 'c', (it) => ({ name: it.name, value: it.value })),
+      texts: merge(cur.texts || [], texts, 't', (it) => ({ name: it.name, style: it.style })),
+    };
+    await commitCanvas(s, f.id, { ...block.json, vars }, { content, block });
+    return json({ ok: true, vars });
+  }),
+);
+
+server.tool(
+  'create_canvas_component',
+  'Turn canvas items into a reusable component (like Figma): e.g. a button = its rect + its label. Then place '
+  + 'instances with insert_canvas_component. Editing the main component later (update_canvas_annotation / '
+  + 'update_canvas_node on its items) updates every instance; each instance keeps its own text.',
+  { name: z.string(), title: z.string(), nodeIds: z.array(z.string()).optional(), annotationIds: z.array(z.string()).optional() },
+  async ({ name, title, nodeIds = [], annotationIds = [] }) => withSession(async (s) => {
+    const { f, content, block } = await ensureCanvas(s, name);
+    const r = createComponent(block.json, nodeIds, annotationIds, title);
+    if (!r.id) throw new Error('pass the ids of the items that make up the component');
+    await commitCanvas(s, f.id, r.json, { content, block });
+    return json({ ok: true, componentId: r.id });
+  }),
+);
+
+server.tool(
+  'insert_canvas_component',
+  'Place an instance of a component (by name or id) with its top-left corner at x/y. `texts` replaces the texts of '
+  + 'the instance in order (e.g. ["Cancelar"] for a button). Returns the new ids.',
+  { name: z.string(), component: z.string(), x: z.number().optional(), y: z.number().optional(), texts: z.array(z.string()).optional() },
+  async ({ name, component, x, y, texts }) => withSession(async (s) => {
+    const { f, content, block } = await ensureCanvas(s, name);
+    const c = listComponents(block.json).find(k => k.id === component) || listComponents(block.json).find(k => k.name.toLowerCase() === component.toLowerCase());
+    if (!c) throw new Error(`component not found: ${component}`);
+    const r = insertInstance(block.json, c.id, x != null && y != null ? { x, y } : null, (p) => newCanvasId(p === 'n' ? 'n' : 'ann'));
+    let next = r.json;
+    if (texts && texts.length) {
+      const order = [...r.ids.nodes, ...r.ids.annos];
+      let k = 0;
+      const withText = (it) => (order.includes(it.id) && typeof it.text === 'string' && k < texts.length ? { ...it, text: texts[k++] } : it);
+      next = { ...next, nodes: (next.nodes || []).map(withText), annotations: (next.annotations || []).map(withText) };
+    }
+    await commitCanvas(s, f.id, next, { content, block });
+    return json({ ok: true, ...r.ids });
+  }),
+);
+
+server.tool(
+  'boolean_canvas_shapes',
+  'Combine closed shapes / vector paths like Figma boolean operations: union, subtract (the others are cut out of '
+  + 'the bottom one), intersect, exclude. Pass the drawing ids; the result is one editable vector path with the '
+  + 'style of the bottom-most item, and the originals are removed. Returns the new id.',
+  { name: z.string(), op: z.enum(['union', 'subtract', 'intersect', 'exclude']), annotationIds: z.array(z.string()).min(2) },
+  async ({ name, op, annotationIds }) => withSession(async (s) => {
+    const { f, content, block } = await ensureCanvas(s, name);
+    const list = block.json.annotations || [];
+    const eff = (a, i) => (typeof a.z === 'number' ? a.z : (a.layer === 'back' ? -1e9 + i : 1e9 + i));
+    const items = list.map((a, i) => ({ a, z: eff(a, i) })).filter(x => annotationIds.includes(x.a.id)).sort((p, q) => p.z - q.z).map(x => x.a);
+    if (items.length < 2) throw new Error('pass at least two drawing ids that exist');
+    const bad = items.find(a => !canBoolean(a));
+    if (bad) throw new Error(`not a closed shape or path: ${bad.id}`);
+    const res = booleanOp(op, items);
+    const ids = new Set(items.map(a => a.id));
+    const id = newCanvasId('ann');
+    const rest = list.filter(a => !ids.has(a.id));
+    const annotations = res ? [...rest, { ...res, id }] : rest;
+    await commitCanvas(s, f.id, { ...block.json, annotations }, { content, block });
+    return json({ ok: true, id: res ? id : null, empty: !res });
+  }),
+);
+
+server.tool(
+  'canvas_item_css',
+  'Get the CSS of a canvas item (like Figma Inspect): size, background/gradient, border, radius, shadows, blur, '
+  + 'and typography for text. Pass a node id or a drawing (annotation) id. Handy to turn a design into code.',
+  { name: z.string(), id: z.string() },
+  async ({ name, id }) => withSession(async (s) => {
+    const { block } = await ensureCanvas(s, name);
+    const el = (block.json.nodes || []).find(n => n.id === id) || (block.json.annotations || []).find(a => a.id === id);
+    if (!el) throw new Error(`item not found: ${id}`);
+    return json({ id, css: itemCssText(el) });
+  }),
+);
+
+server.tool(
+  'group_canvas_items',
+  'Group canvas items so they move together (like Ctrl+G / a Figma group): pass the node ids and/or drawing '
+  + '(annotation) ids. ungroup: true removes the group of those items. Imported SVG <g> groups (a button with its '
+  + 'label, a list row) are already grouped.',
+  {
+    name: z.string(),
+    nodeIds: z.array(z.string()).optional(),
+    annotationIds: z.array(z.string()).optional(),
+    ungroup: z.boolean().optional(),
+  },
+  async ({ name, nodeIds = [], annotationIds = [], ungroup }) => withSession(async (s) => {
+    const { f, content, block } = await ensureCanvas(s, name);
+    const N = new Set(nodeIds), A = new Set(annotationIds);
+    if (N.size + A.size < (ungroup ? 1 : 2)) throw new Error(ungroup ? 'pass at least one id' : 'a group needs at least two items');
+    const nodes = block.json.nodes || [], annos = block.json.annotations || [];
+    let next;
+    if (ungroup) {
+      const gs = new Set([...nodes.filter(n => N.has(n.id)).map(n => n.grp), ...annos.filter(a => A.has(a.id)).map(a => a.grp)].filter(Boolean));
+      const strip = (x) => { if (!gs.has(x.grp)) return x; const { grp, ...r } = x; return r; };
+      next = { ...block.json, nodes: nodes.map(strip), annotations: annos.map(strip) };
+    } else {
+      const g = 'lg' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+      next = { ...block.json, nodes: nodes.map(n => (N.has(n.id) ? { ...n, grp: g } : n)), annotations: annos.map(a => (A.has(a.id) ? { ...a, grp: g } : a)) };
+    }
+    await commitCanvas(s, f.id, next, { content, block });
+    return json({ ok: true });
+  }),
+);
+
+server.tool(
+  'import_svg_to_canvas',
+  'Put a design on the canvas from SVG markup, as EDITABLE pieces (not a flat picture): rect/circle/ellipse → '
+  + 'shapes, line → line, path/polyline/polygon → vector paths, text → text labels, image (http/https/data href) → '
+  + 'image nodes. Group transforms, viewBox, inherited fill/stroke, <style> rules (tag, .class, #id, descendants), '
+  + 'inline style, <use>/<symbol>, linear & radial gradients, drop shadows (feDropShadow, feOffset+feGaussianBlur, '
+  + 'CSS drop-shadow) and clip-path are all supported. Masks, patterns and markers are ignored. This is the way to sketch UI mockups, logos, icons, '
+  + 'diagrams or illustrations for the user: write the SVG, import it at x/y, then canvas_screenshot to check it '
+  + 'and update_canvas_annotation / update_canvas_node to fix details. Optional `frame` wraps everything in a titled '
+  + 'frame (slide). Returns the ids created.',
+  {
+    name: z.string(),
+    svg: z.string().min(10).max(400000),
+    x: z.number().optional(),
+    y: z.number().optional(),
+    scale: z.number().min(0.01).max(50).optional(),
+    frame: z.string().max(120).optional(),
+  },
+  async ({ name, svg, x, y, scale, frame }) => withSession(async (s) => {
+    const { f, content, block } = await ensureCanvas(s, name);
+    let px = x, py = y;
+    if (px == null || py == null) {
+      // A la derecha de lo que ya hay, para no tapar nada.
+      const boxes = [...(block.json.nodes || []), ...(block.json.groups || []), ...((block.json.annotations || []).map(a => a.bbox).filter(Boolean))];
+      const maxX = boxes.length ? Math.max(...boxes.map(b => (b.x || 0) + (b.w || 0))) : 0;
+      const minY = boxes.length ? Math.min(...boxes.map(b => b.y || 0)) : 0;
+      if (px == null) px = boxes.length ? Math.round(maxX + 120) : 0;
+      if (py == null) py = Math.round(minY);
+    }
+    const zs = [...(block.json.nodes || []).map((n, i) => (n.z != null ? n.z : i)), ...(block.json.annotations || []).map(a => a.z).filter(z => typeof z === 'number')];
+    const zStart = Math.ceil(Math.max(0, ...zs)) + 1;
+    const res = svgToCanvas(svg, { x: px, y: py, scale: scale || 1, zStart, newId: (p) => newCanvasId(p === 'n' ? 'n' : 'ann') });
+    if (!res.annotations.length && !res.nodes.length) throw new Error('nothing drawable found in the SVG (supported: rect, circle, ellipse, line, polyline, polygon, path, text, image)');
+    const next = {
+      ...block.json,
+      annotations: [...(block.json.annotations || []), ...res.annotations],
+      nodes: [...(block.json.nodes || []), ...res.nodes],
+    };
+    let groupId = null;
+    if (frame && res.bbox) {
+      groupId = newCanvasId('g');
+      const pad = 40;
+      next.groups = [...(block.json.groups || []), { id: groupId, title: frame, x: res.bbox.x - pad, y: res.bbox.y - pad - 30, w: res.bbox.w + pad * 2, h: res.bbox.h + pad * 2 + 30, color: 'rgba(107,114,128,0.06)' }];
+    }
+    await commitCanvas(s, f.id, next, { content, block });
+    s.publishMcpAction({ kind: 'canvas_annotate', note: f.name, noteId: f.id, vault: s.vaultName(f.vaultId) });
+    return json(withHints({
+      ok: true, bbox: res.bbox, skipped: res.skipped, groupId,
+      annotationIds: res.annotations.map(a => a.id), nodeIds: res.nodes.map(n => n.id),
+    }, [
+      { tool: 'canvas_screenshot', args: { name: f.name }, reason: 'see how the design came out and fix what looks off' },
+      { tool: 'focus_note', args: { name: f.name }, reason: 'show the user the design' },
+    ]));
   }),
 );
 
@@ -5225,7 +5623,7 @@ server.tool(
     const { f, content, block } = await ensureCanvas(s, name);
     const nodes = block.json.nodes.filter(n => n.id !== nodeId);
     const edges = (block.json.edges || []).filter(e => e.from !== nodeId && e.to !== nodeId);
-    await s.canvasCommit(f.id, { ...block.json, nodes, edges }, { content, block });
+    await commitCanvas(s, f.id, { ...block.json, nodes, edges }, { content, block });
     return json({ ok: true, removed: nodeId });
   }),
 );
@@ -5528,14 +5926,15 @@ server.tool(
       w: n.w || nodeW,
       h: n.h || nodeH,
     }));
-    await s.canvasCommit(f.id, { ...block.json, nodes }, { content, block });
+    await commitCanvas(s, f.id, { ...block.json, nodes }, { content, block });
     return json({ ok: true, layout: 'grid', cols });
   }),
 );
 
 server.tool(
   'update_canvas_node',
-  'Patch any editable field of an existing canvas node: text, color, url, '
+  'Patch any editable field of an existing canvas node: text, color, url, label typography (font, weight, '
+  + 'italic, underline, strike, lineHeight, letterSpacing, transform, align, wrap, plain), '
   + 'query, title, sticky, view (query nodes: list|cards|table), x/y/w/h. '
   + 'Pass null to delete a field (e.g. color: null clears the tint). This is '
   + 'how you EDIT content you or the user placed earlier — prefer it over '
@@ -5550,13 +5949,34 @@ server.tool(
     title: z.string().nullable().optional(),
     sticky: z.boolean().nullable().optional(),
     view: z.enum(['list', 'cards', 'table']).nullable().optional(),
+    order: ORDER,
+    link: z.string().nullable().optional().describe('prototype: id or title of a frame (group) to jump to when this is clicked while presenting'),
+    ...VARS_SCHEMA,
+    shape: z.enum(['rect', 'ellipse', 'diamond', 'hexagon', 'cylinder', 'triangle', 'cloud', 'callout', 'star']).optional(),
+    fontSize: z.number().min(6).max(200).optional(),
+    font: z.string().nullable().optional().describe("label text: 'sans' (Inter) | 'display' (Instrument Sans) | 'serif' (Newsreader) | 'mono' (JetBrains Mono) or any installed family"),
+    weight: z.number().min(100).max(900).nullable().optional(),
+    italic: z.boolean().nullable().optional(), underline: z.boolean().nullable().optional(), strike: z.boolean().nullable().optional(),
+    lineHeight: z.number().min(0.5).max(4).nullable().optional(), letterSpacing: z.number().min(-10).max(50).nullable().optional(),
+    transform: z.enum(['upper', 'lower', 'title']).nullable().optional(),
+    align: z.enum(['left', 'center', 'right', 'justify']).nullable().optional(),
+    wrap: z.boolean().nullable().optional().describe('label: fixed-width box (w) that wraps lines'),
+    plain: z.boolean().nullable().optional().describe('label: design text (no padding/shadow, weight 400 by default)'),
     x: z.number().optional(),
     y: z.number().optional(),
     w: z.number().optional(),
     h: z.number().optional(),
   },
-  async ({ name, nodeId, ...patch }) => withSession(async (s) => {
+  async ({ name, nodeId, order, ...patch }) => withSession(async (s) => {
     const { f, content, block } = await ensureCanvas(s, name);
+    if (order === 'front') patch.z = nextCanvasZ(block.json);
+    if (order === 'back') patch.z = minCanvasZ(block.json);
+    for (const [k, kind] of [['fillVar', 'colors'], ['colorVar', 'colors'], ['textStyle', 'texts']]) if (typeof patch[k] === 'string') patch[k] = varRef(block.json, kind, patch[k]);
+    if (typeof patch.link === 'string') {
+      const g = (block.json.groups || []).find(x => x.id === patch.link) || (block.json.groups || []).find(x => String(x.title || '').toLowerCase() === patch.link.toLowerCase());
+      if (!g) throw new Error(`link: frame not found: ${patch.link}`);
+      patch.link = g.id;
+    }
     let found = null;
     const nodes = block.json.nodes.map(n => {
       if (n.id !== nodeId) return n;
@@ -5569,7 +5989,7 @@ server.tool(
       return next;
     });
     if (!found) throw new Error(`node not found: ${nodeId}`);
-    await s.canvasCommit(f.id, { ...block.json, nodes }, { content, block });
+    await commitCanvas(s, f.id, { ...block.json, nodes }, { content, block });
     return json({ ok: true, node: found });
   }),
 );
@@ -5590,8 +6010,9 @@ server.tool(
     color: z.string().optional(),
     order: z.number().optional(),
     nodeIds: z.array(z.string()).optional(),
+    layout: z.object({ dir: z.enum(['column', 'row']), gap: z.number().min(0).optional(), pad: z.number().min(0).optional(), align: z.enum(['start', 'center', 'end']).optional(), hug: z.boolean().optional() }).optional().describe('auto layout for the frame content'),
   },
-  async ({ name, title, x, y, w, h, color, order, nodeIds }) => withSession(async (s) => {
+  async ({ name, title, x, y, w, h, color, order, nodeIds, layout }) => withSession(async (s) => {
     const { f, content, block } = await ensureCanvas(s, name);
     const palette = ['rgba(125,169,90,0.10)', 'rgba(234,88,12,0.10)', 'rgba(59,130,246,0.10)', 'rgba(168,85,247,0.10)', 'rgba(220,38,38,0.08)', 'rgba(107,114,128,0.10)'];
     const group = {
@@ -5600,6 +6021,7 @@ server.tool(
       color: color || palette[(block.json.groups || []).length % palette.length],
     };
     if (order != null) group.order = order;
+    if (layout) group.layout = layout;
     if (nodeIds && nodeIds.length) {
       const members = block.json.nodes.filter(n => nodeIds.includes(n.id));
       if (!members.length) throw new Error('none of the given nodeIds exist in this canvas');
@@ -5616,15 +6038,15 @@ server.tool(
       group.w = w || 400;
       group.h = h || 280;
     }
-    const next = { ...block.json, groups: [...(block.json.groups || []), group] };
-    await s.canvasCommit(f.id, next, { content, block });
+    const next = applyAutoLayout({ ...block.json, groups: [...(block.json.groups || []), group] });
+    await commitCanvas(s, f.id, next, { content, block });
     return json({ ok: true, group });
   }),
 );
 
 server.tool(
   'update_canvas_group',
-  'Patch a frame/group: title, color, order (slideshow position), x/y/w/h. '
+  'Patch a frame/group: title, color, order (slideshow position), layout (auto layout), x/y/w/h. '
   + 'Pass null on color/order to clear.',
   {
     name: z.string(),
@@ -5632,6 +6054,7 @@ server.tool(
     title: z.string().optional(),
     color: z.string().nullable().optional(),
     order: z.number().nullable().optional(),
+    layout: z.object({ dir: z.enum(['column', 'row']), gap: z.number().min(0).optional(), pad: z.number().min(0).optional(), align: z.enum(['start', 'center', 'end']).optional(), hug: z.boolean().optional() }).nullable().optional().describe('auto layout: the frame places its content in a column or row with gap/padding (like Figma auto layout / CSS flex); items are ordered by their current position; hug = frame fits its content. null turns it off.'),
     x: z.number().optional(),
     y: z.number().optional(),
     w: z.number().optional(),
@@ -5651,7 +6074,7 @@ server.tool(
       return next;
     });
     if (!found) throw new Error(`group not found: ${groupId}`);
-    await s.canvasCommit(f.id, { ...block.json, groups }, { content, block });
+    await commitCanvas(s, f.id, applyAutoLayout({ ...block.json, groups }), { content, block });
     return json({ ok: true, group: found });
   }),
 );
@@ -5682,7 +6105,7 @@ server.tool(
       groups: [...(block.json.groups || []), ...built.groups],
       annotations: [...(block.json.annotations || []), ...built.annotations],
     };
-    await s.canvasCommit(f.id, next, { content, block });
+    await commitCanvas(s, f.id, next, { content, block });
     s.focusNote(f.id);
     return json(withHints(
       { ok: true, template, added: { nodes: built.nodes.length, groups: built.groups.length, edges: built.edges.length } },
@@ -5752,7 +6175,7 @@ server.tool(
       if (n.sticky) next.color = p.color;
       return next;
     });
-    await s.canvasCommit(f.id, { ...block.json, nodes, groups }, { content, block });
+    await commitCanvas(s, f.id, { ...block.json, nodes, groups }, { content, block });
     s.focusNote(f.id);
     return json(withHints(
       { ok: true, clusters: clusters.length, groups: groups.slice(-clusters.length) },

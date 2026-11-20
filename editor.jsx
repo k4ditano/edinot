@@ -5459,6 +5459,10 @@ function parseCanvasBlocks(src) {
               nodes: Array.isArray(parsed.nodes) ? parsed.nodes : [],
               edges: Array.isArray(parsed.edges) ? parsed.edges : [],
               groups: Array.isArray(parsed.groups) ? parsed.groups : [],
+              // Los dibujos (trazos, formas, SVG importado) también viven en la valla: antes se perdían aquí al
+              // abrir en la app un canvas escrito por el MCP o la CLI (la migración los sembraba vacíos).
+              ...(Array.isArray(parsed.annotations) ? { annotations: parsed.annotations } : {}),
+              ...(parsed.vars && typeof parsed.vars === 'object' ? { vars: parsed.vars } : {}),
             };
           }
         } catch { /* keep empty json so UI shows clean canvas */ }

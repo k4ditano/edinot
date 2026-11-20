@@ -45,7 +45,7 @@ test('an existing board gets the page to the left of what it has, once', () => {
 });
 
 test('the page block is taller for a longer page, within bounds', () => {
-  const short = makePageNode('# a\n').h;
+  const short = makePageNode('# a\nuna línea\n').h;
   const long = makePageNode('# a\n' + 'línea\n'.repeat(400)).h;
   assert.ok(short >= 360 && long <= 1100 && long > short);
 });
@@ -73,4 +73,18 @@ test('the page node lives in the structured model and in its mirror like any nod
   const mirror = JSON.parse(serializeCanvasDeterministic(doc));
   assert.equal(mirror.nodes.find(n => n.kind === 'page').x, 120);
   assert.equal(mirror.nodes.length, 2);
+});
+
+test('a note with only its title enters its canvas as a compact card, and expands to a page', async () => {
+  const { isEmptyPage, expandedPageNode, PAGE_COMPACT_W } = await import('../shared/page-canvas.js');
+  assert.equal(isEmptyPage(''), true);
+  assert.equal(isEmptyPage('# Título\n\n'), true);
+  assert.equal(isEmptyPage('# Título\nalgo'), false);
+  const n = makePageNode('# Título\n');
+  assert.equal(n.compact, true);
+  assert.equal(n.w, PAGE_COMPACT_W);
+  const big = expandedPageNode(n, '# Título\n');
+  assert.equal(big.compact, undefined);
+  assert.equal(big.w, 760);
+  assert.equal(makePageNode('# T\ntexto').compact, undefined);
 });

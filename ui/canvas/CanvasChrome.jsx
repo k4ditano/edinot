@@ -20,6 +20,8 @@ const P = {
   more: <><circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none" /><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none" /></>,
   highlighter: <><path d="M6 15 15 6l3 3-9 9H6z" /><path d="M4 21h9" /></>,
   laser: <><circle cx="17" cy="7" r="2.5" /><path d="M14.8 9.2 4 20M4 16v4h4" /></>,
+  props: <><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0" /><circle cx="16" cy="6" r="2" /><circle cx="10" cy="12" r="2" /><circle cx="18" cy="18" r="2" /></>,
+  bucket: <><path d="m5 11 7-7 7 7-7 7z" /><path d="M5 11h14" /><path d="M20 15.5c0 1.2-.8 2-1.5 2s-1.5-.8-1.5-2c0-.9 1.5-3 1.5-3s1.5 2.1 1.5 3z" /></>,
   eraser: <><path d="M9 19 4.5 14.5a2 2 0 0 1 0-2.8l7-7a2 2 0 0 1 2.8 0l4.2 4.2a2 2 0 0 1 0 2.8L12 19z" /><path d="M9 19h11" /></>,
   line: <path d="M5 19 19 5" />,
   ellipse: <ellipse cx="12" cy="12" rx="8.5" ry="6.5" />,
@@ -44,7 +46,7 @@ const P = {
   grid: <path d="M3 9h18M3 15h18M9 3v18M15 3v18" />,
   layout: <><rect x="3.5" y="3.5" width="7" height="7" rx="1.5" /><rect x="13.5" y="3.5" width="7" height="7" rx="1.5" /><rect x="3.5" y="13.5" width="7" height="7" rx="1.5" /><rect x="13.5" y="13.5" width="7" height="7" rx="1.5" /></>,
   spark: <><path d="M10 3l1.6 4.4L16 9l-4.4 1.6L10 15l-1.6-4.4L4 9l4.4-1.6z" /><path d="M18 14l.8 2.2L21 17l-2.2.8L18 20l-.8-2.2L15 17l2.2-.8z" /></>,
-  fit: <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />,
+  fit: <><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /><rect x="9" y="9" width="6" height="6" rx="1.2" /></>,
   present: <path d="M7 4.5v15L19 12z" />,
   download: <><path d="M12 4v11M7 10l5 5 5-5" /><path d="M5 20h14" /></>,
   full: <path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5" />,
@@ -89,7 +91,6 @@ export function CvIcon({ name, size = 18, stroke = 1.7 }) {
 const DRAW_EXTRA = [
   { tool: 'highlighter', icon: 'highlighter', label: 'canvas.tool.highlighter' },
   { tool: 'laser', icon: 'laser', label: 'canvas.tool.laser' },
-  { tool: 'eraser', icon: 'eraser', label: 'canvas.tool.eraser' },
   { tool: 'line', icon: 'line', label: 'canvas.tool.line' },
 ];
 
@@ -152,6 +153,8 @@ export function CanvasDock({ tool, setTool, a }) {
         onClick={(e) => setShapeMenu(e.currentTarget.getBoundingClientRect())} />
       <ToolBtn icon="arrow" label={t('canvas.tool.arrow')} on={tool === 'arrow'} onClick={() => setTool('arrow')} />
       <ToolBtn icon="pen" label={t('canvas.tool.pen')} on={tool === 'pen'} onClick={() => setTool('pen')} />
+      <ToolBtn icon="eraser" label={t('canvas.tool.eraser')} on={tool === 'eraser'} onClick={() => setTool('eraser')} />
+      <ToolBtn icon="bucket" label={t('canvas.tool.fill')} on={tool === 'fill'} onClick={() => setTool('fill')} />
       <ToolBtn icon="frame" label={t('canvas.addGroup')} onClick={a.addGroup} />
       {(extra || drawn) && <ToolBtn icon={(extra || { icon: drawn }).icon} label={extra ? t(extra.label) : t('cv.draw.' + drawn)} on onClick={() => setTool(extra ? extra.tool : drawn)} />}
       <span className="cv-sep" aria-hidden="true" />
@@ -202,6 +205,7 @@ export function CanvasActions({ a, snapGrid, fullscreen }) {
       <ToolBtn className="sm" icon="undo" label={t('canvas.undo')} onClick={a.canvasUndo} />
       <ToolBtn className="sm" icon="redo" label={t('canvas.redo')} onClick={a.canvasRedo} />
       <ToolBtn className="sm" icon="fit" label={t('canvas.fitContent')} onClick={a.fitToContent} />
+      <ToolBtn className="sm" icon="props" label={t('cvp.title')} on={a.propsOpen ? true : undefined} onClick={a.toggleProps} />
       <ToolBtn className="sm" icon="more" label={t('cv.more')} aria-haspopup="menu"
         on={menu ? true : undefined} onClick={open('more')} />
       {menu && (

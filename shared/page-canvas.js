@@ -43,8 +43,22 @@ export function pageNodeHeight(src) {
   return Math.max(360, Math.min(1100, 160 + lines * 30));
 }
 
+// Una nota recién creada, con solo el título y nada de texto, no necesita una página entera en el canvas: entra
+// como una tarjeta pequeña con el título (`compact`) que se abre a página al hacerle doble clic.
+export const PAGE_COMPACT_W = 340;
+export const PAGE_COMPACT_H = 76;
+export function isEmptyPage(src) {
+  return pageText(src).replace(/^[ \t]*#{1,6}[ \t].*$/m, '').trim() === '';
+}
 export function makePageNode(src, at = { x: 0, y: 0 }) {
-  return { id: PAGE_NODE_ID, kind: 'page', x: Math.round(at.x), y: Math.round(at.y), w: PAGE_NODE_W, h: pageNodeHeight(src) };
+  const x = Math.round(at.x), y = Math.round(at.y);
+  if (isEmptyPage(src)) return { id: PAGE_NODE_ID, kind: 'page', x, y, w: PAGE_COMPACT_W, h: PAGE_COMPACT_H, compact: true };
+  return { id: PAGE_NODE_ID, kind: 'page', x, y, w: PAGE_NODE_W, h: pageNodeHeight(src) };
+}
+// La misma tarjeta ya abierta como página.
+export function expandedPageNode(node, src) {
+  const { compact, ...rest } = node || {};
+  return { ...rest, w: PAGE_NODE_W, h: pageNodeHeight(src) };
 }
 
 // El canvas con su bloque de página: si no lo tiene, se le pone a la
@@ -59,7 +73,7 @@ export function withPageNode(json, src) {
   if (boxes.length) {
     const minX = Math.min(...boxes.map(n => n.x || 0));
     const minY = Math.min(...boxes.map(n => n.y || 0));
-    at = { x: minX - PAGE_NODE_W - 80, y: minY };
+    at = { x: minX - (isEmptyPage(src) ? PAGE_COMPACT_W : PAGE_NODE_W) - 80, y: minY };
   }
   return { ...j, nodes: [makePageNode(src, at), ...nodes] };
 }
@@ -82,7 +96,8 @@ export function addOwnCanvas(src) {
 // Un rectángulo de la página dentro del canvas, en coordenadas del mundo.
 export function pageNodeRect(json) {
   const n = (json && Array.isArray(json.nodes) ? json.nodes : []).find(isPageNode);
-  return n ? { x: n.x || 0, y: n.y || 0, w: n.w || PAGE_NODE_W, h: n.h || 600 } : null;
+  // La tarjeta compacta cuenta como una página de ancho normal: la transición Página↔Canvas no hace zoom de más.
+  return n ? { x: n.x || 0, y: n.y || 0, w: n.compact ? PAGE_NODE_W : (n.w || PAGE_NODE_W), h: n.h || 600 } : null;
 }
 
 // El viewport (x, y, zoom) en el que el bloque de página ocupa exactamente la

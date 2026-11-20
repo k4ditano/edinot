@@ -1,6 +1,7 @@
 // Fichas del canvas y sus piezas (adjuntos, modal de nota, consultas, grupos, selector de notas, vista previa).
 
 import { shapeD, shapeTextBox } from './shapes.js';
+import { labelTextStyle } from '../../shared/text-style.js';
 import { useI18n, t, getLang } from '../../i18n.js';
 import { useRef, useState, useMemo, useEffect, useLayoutEffect, useDeferredValue, useCallback, memo } from 'react';
 import { mountDbBlock, sweepDbBlocks } from '../db/mount.jsx';
@@ -604,8 +605,8 @@ export function CanvasTileImpl({ node, note, syncConfig, onMouseDown, onOpen, on
         {isQuery && <CanvasQueryResults node={node} notes={notes} onOpen={(f) => onOpen(f, node)} onPatchNode={onPatchNode} />}
         {isAttachment && <CanvasAttachmentPreview node={node} syncConfig={syncConfig} />}
         {isLabel && (editingText !== null
-          ? <div className="canvas-label-grow" data-value={(editingText || '') + ' '} style={{ fontSize: (node.fontSize || 20) }}>{textEditor}</div>
-          : <div className="canvas-node-labeltext" style={{ fontSize: (node.fontSize || 20) }}>{node.text || t('canvas.labelDefault')}</div>)}
+          ? <div className="canvas-label-grow" data-value={(editingText || '') + ' '} style={labelTextStyle(node)}>{textEditor}</div>
+          : <div className="canvas-node-labeltext" style={labelTextStyle(node)}>{node.text || t('canvas.labelDefault')}</div>)}
         {isDraw && (
           <svg className="canvas-node-drawsvg" viewBox={`0 0 ${node.w || 100} ${node.h || 100}`} preserveAspectRatio="none">
             <path d={node.path || ''} fill="none" stroke={node.color || '#ea580c'}
@@ -646,7 +647,7 @@ export function CanvasTileImpl({ node, note, syncConfig, onMouseDown, onOpen, on
 
 export const CanvasTile = memo(CanvasTileImpl);
 
-export function CanvasGroup({ group, onMouseDown, onRename, onDelete, onDuplicate }) {
+export function CanvasGroup({ group, onMouseDown, onRename, onDelete, onDuplicate, onLayoutMenu }) {
   useI18n();
   return (
     <div className="canvas-group"
@@ -656,6 +657,13 @@ export function CanvasGroup({ group, onMouseDown, onRename, onDelete, onDuplicat
         onMouseDown={(e) => onMouseDown(e, group, 'drag')}
         onDoubleClick={() => onRename(group)}>
         <span>{group.title || t('canvas.groupDefault')}</span>
+        {onLayoutMenu && (
+          <button className={`canvas-group-del canvas-group-layout${group.layout ? ' on' : ''}`} title={t('canvas.autolayout')}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); onLayoutMenu(group, e.currentTarget.getBoundingClientRect()); }}>
+            {group.layout && group.layout.dir === 'row' ? '⇉' : '⇊'}
+          </button>
+        )}
         {onDuplicate && (
           <button className="canvas-group-del" title={t('canvas.groupDuplicate')}
             onMouseDown={(e) => e.stopPropagation()}
@@ -885,7 +893,7 @@ export function CanvasEmbedPreview({ targetId, targetName, found, json, onOpen }
 // modo Página): se escribe aquí y cambia la nota. Se arrastra por la cabecera
 // y se redimensiona por la esquina; dentro del cuerpo el ratón, la rueda y el
 // teclado son del texto, no del canvas.
-function CanvasPageTileImpl({ node, title, renderPage, isSelected, onMouseDown }) {
+function CanvasPageTileImpl({ node, title, renderPage, isSelected, onMouseDown, onExpand }) {
   useI18n();
   const bodyRef = useRef(null);
   useEffect(() => {
@@ -899,6 +907,18 @@ function CanvasPageTileImpl({ node, title, renderPage, isSelected, onMouseDown }
   }, []);
   const w = node.w || 760;
   const h = node.h || 600;
+  if (node.compact) {
+    // Nota solo con título: tarjeta pequeña; con doble clic (o al empezar a escribir) se abre como página.
+    return (
+      <div className={`canvas-node canvas-node-page canvas-node-page-compact${isSelected ? ' selected' : ''}`}
+        style={{ left: node.x, top: node.y, width: w, height: h }} data-node-id={node.id}
+        onMouseDown={(e) => onMouseDown(e, node, 'drag')}
+        onDoubleClick={(e) => { e.stopPropagation(); onExpand && onExpand(node); }}>
+        <div className="canvas-page-compact-title">{title || t('canvas.page')}</div>
+        <div className="canvas-page-compact-hint">{t('canvas.pageCompactHint')}</div>
+      </div>
+    );
+  }
   return (
     <div className={`canvas-node canvas-node-page${isSelected ? ' selected' : ''}`}
       style={{ left: node.x, top: node.y, width: w, height: h }}

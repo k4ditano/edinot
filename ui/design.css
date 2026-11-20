@@ -763,3 +763,108 @@ body :is(
 .meet-spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--accent); animation: meet-spin .8s linear infinite; flex: none; }
 @keyframes meet-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .meet-spin { animation-duration: 2.4s; } .meet-dot { transition: none; } }
+
+/* Nota solo con título en su canvas: tarjeta pequeña (se abre a página con doble clic). */
+.canvas-node.canvas-node-page.canvas-node-page-compact { display: flex; flex-direction: column; justify-content: center; gap: 4px; padding: 12px 16px; box-sizing: border-box;
+  background: var(--surface, #fff); border: 1px solid var(--line, rgba(0,0,0,.12)); border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,.06); cursor: grab; }
+.canvas-node.canvas-node-page-compact.selected { outline: 2px solid var(--accent, #2383E2); outline-offset: 2px; }
+.canvas-page-compact-title { font-weight: 600; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.canvas-page-compact-hint { font-size: 12px; opacity: .55; }
+
+/* Goma tipo Paint: círculo del tamaño real que sigue al ratón. */
+.canvas-eraser-cursor { border: 1.5px solid rgba(0,0,0,.65); box-shadow: 0 0 0 1px rgba(255,255,255,.85); border-radius: 50%; pointer-events: none; z-index: 200; box-sizing: border-box; }
+.canvas-tool-eraser, .canvas-tool-eraser * { cursor: none !important; }
+
+/* Color libre (Paint): un círculo con el color actual que abre el selector del sistema. */
+.canvas-style-custom { position: relative; width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--surface, #fff); box-shadow: 0 0 0 1px rgba(0,0,0,.25), inset 0 0 0 1px rgba(0,0,0,.1); cursor: pointer; overflow: hidden; flex: none;
+  background-image: conic-gradient(from 0deg, #f43f5e, #f59e0b, #84cc16, #06b6d4, #6366f1, #d946ef, #f43f5e) !important; }
+.canvas-style-custom::after { content: ''; position: absolute; inset: 4px; border-radius: 50%; background: inherit; background-image: none; }
+.canvas-style-custom input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; border: 0; padding: 0; }
+.canvas-tool-fill .canvas-world, .canvas-tool-fill [data-annotation-id], .canvas-tool-fill .canvas-node { cursor: cell !important; }
+.canvas-tool-picker .canvas-world, .canvas-tool-picker [data-annotation-id], .canvas-tool-picker .canvas-node { cursor: crosshair !important; }
+
+/* Formas con texto: se ve solo la figura, sin la tarjeta (fondo, borde y sombra) de las demás fichas.
+   Seleccionada, un contorno discontinuo alrededor, como las etiquetas. */
+.canvas-node.canvas-node-shape { background: transparent !important; border: 0 !important; box-shadow: none !important; }
+.canvas-node.canvas-node-shape.selected { outline: 1.5px dashed var(--accent, #2383E2); outline-offset: 4px; }
+
+/* El «+» para sacar una flecha solo aparece al pasar por encima o con la ficha seleccionada (antes se veía
+   siempre y llenaba el dibujo de puntos). */
+.canvas-node .canvas-node-edge-anchor { opacity: 0; }
+.canvas-node:hover .canvas-node-edge-anchor, .canvas-node.selected .canvas-node-edge-anchor { opacity: 1; }
+
+/* Panel de diseño y capas (estilo Figma), a la derecha bajo las acciones. */
+.cvp { position: absolute; top: 64px; right: 12px; width: 248px; max-height: calc(100% - 170px); display: flex; flex-direction: column; z-index: 60;
+  background: var(--surface, #fff); border: 1px solid var(--line, rgba(0,0,0,.1)); border-radius: 14px; box-shadow: 0 8px 28px rgba(0,0,0,.12); font-size: 12.5px; overflow: hidden; }
+.cvp-tabs { display: flex; align-items: center; gap: 2px; padding: 6px; border-bottom: 1px solid var(--line, rgba(0,0,0,.08)); }
+.cvp-tabs button { border: 0; background: none; padding: 5px 10px; border-radius: 8px; font: inherit; color: inherit; opacity: .6; cursor: pointer; }
+.cvp-tabs button.on { opacity: 1; background: color-mix(in srgb, currentColor 8%, transparent); font-weight: 600; }
+.cvp-tabs .cvp-close { margin-left: auto; font-size: 16px; line-height: 1; padding: 4px 8px; }
+.cvp-body { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 10px; overflow: auto; }
+.cvp-empty { margin: 0; opacity: .6; line-height: 1.45; }
+.cvp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.cvp-num { display: flex; align-items: center; gap: 6px; background: color-mix(in srgb, currentColor 5%, transparent); border-radius: 7px; padding: 0 8px; height: 28px; }
+.cvp-num span { opacity: .55; min-width: 14px; font-size: 11.5px; }
+.cvp-num input { width: 100%; min-width: 0; border: 0; background: none; font: inherit; color: inherit; outline: none; -moz-appearance: textfield; }
+.cvp-num input::-webkit-inner-spin-button { display: none; }
+.cvp-num em { font-style: normal; opacity: .5; }
+.cvp-color, .cvp-row { display: flex; align-items: center; gap: 8px; }
+.cvp-color > span, .cvp-row > span { width: 52px; opacity: .6; flex: none; }
+.cvp-swatch { position: relative; width: 22px; height: 22px; border-radius: 6px; box-shadow: inset 0 0 0 1px rgba(0,0,0,.15); flex: none; cursor: pointer; overflow: hidden; }
+.cvp-swatch.none { background: linear-gradient(135deg, transparent 45%, #ef4444 45% 55%, transparent 55%), #fff; }
+.cvp-swatch input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.cvp-hex { flex: 1; min-width: 0; height: 26px; border: 0; border-radius: 7px; padding: 0 8px; background: color-mix(in srgb, currentColor 5%, transparent); font: inherit; font-family: var(--font-mono, monospace); color: inherit; outline: none; }
+.cvp-x { border: 0; background: none; cursor: pointer; opacity: .5; font-size: 15px; color: inherit; }
+.cvp-row select { flex: 1; height: 28px; border-radius: 7px; border: 0; background: color-mix(in srgb, currentColor 5%, transparent); font: inherit; color: inherit; }
+.cvp-layers { list-style: none; margin: 0; padding: 4px; overflow: auto; }
+.cvp-layers li { display: flex; align-items: center; gap: 2px; border-radius: 7px; }
+.cvp-layers li.on { background: color-mix(in srgb, var(--accent, #2383E2) 14%, transparent); }
+.cvp-layers li.off .cvp-lname { opacity: .4; }
+.cvp-lname { flex: 1; min-width: 0; text-align: left; border: 0; background: none; padding: 5px 8px; font: inherit; color: inherit; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.cvp-ic { border: 0; background: none; cursor: pointer; opacity: 0; font-size: 12px; padding: 4px; color: inherit; }
+.cvp-layers li:hover .cvp-ic, .cvp-ic.act { opacity: .75; }
+
+/* Los «+» para conectar: pequeños y discretos (antes 22px con borde, rodeaban hasta los botones pequeños). */
+.canvas-node .canvas-node-edge-anchor { width: 16px !important; height: 16px !important; font-size: 11px !important; top: -6px; right: -6px; }
+.canvas-node-side-anchor, .canvas-side-anchor { transform: scale(.8); }
+.canvas-plus-handle { opacity: .6; transition: opacity .12s; }
+.canvas-plus-handle:hover { opacity: 1; }
+
+.cvp-add { align-self: flex-start; border: 1px dashed color-mix(in srgb, currentColor 25%, transparent); background: none; border-radius: 7px; padding: 4px 10px; font: inherit; color: inherit; opacity: .75; cursor: pointer; }
+.cvp-add:hover { opacity: 1; }
+.cvp-chip { border: 0; border-radius: 6px; padding: 3px 8px; background: color-mix(in srgb, currentColor 7%, transparent); font: inherit; font-size: 11.5px; color: inherit; cursor: pointer; }
+.cvp-color .cvp-num { flex: 1; min-width: 0; }
+
+/* Panel de diseño: etiqueta y número separados y sin apretarse. */
+.cvp-num { gap: 8px; }
+.cvp-num span { flex: none; white-space: nowrap; }
+.cvp-color > span, .cvp-row > span { width: 64px; }
+
+.cvp-num select { flex: 1; min-width: 0; border: 0; background: none; font: inherit; color: inherit; outline: none; }
+.cvp-seg { display: flex; align-items: center; gap: 2px; padding: 2px; border-radius: 8px; background: color-mix(in srgb, currentColor 5%, transparent); }
+.cvp-seg button { flex: 1; height: 26px; min-width: 0; border: 0; border-radius: 6px; background: none; color: inherit; font: inherit; font-size: 12.5px; cursor: pointer; opacity: .7; display: inline-flex; align-items: center; justify-content: center; }
+.cvp-seg button.wide { flex: 2.4; }
+.cvp-seg button.on { background: var(--surface, #fff); box-shadow: 0 1px 3px rgba(0,0,0,.12); opacity: 1; }
+.cvp-segsep { width: 1px; align-self: stretch; margin: 4px 2px; background: color-mix(in srgb, currentColor 15%, transparent); }
+
+/* Presentando (prototipo): sin herramientas de edición a la vista. */
+.canvas-presenting .canvas-node-edge-anchor, .canvas-presenting .canvas-node-resize, .canvas-presenting .canvas-node-del,
+.canvas-presenting .canvas-plus-handle, .canvas-presenting .cv-minimap, .canvas-presenting .canvas-minimap,
+.canvas-presenting .cvp, .canvas-presenting .cv-zoom { display: none !important; }
+.canvas-presenting .canvas-present-bar { box-shadow: 0 0 0 1px rgba(255,255,255,.12), 0 8px 24px rgba(0,0,0,.4); }
+.canvas-group-layout { font-size: 12px; opacity: .55; }
+.canvas-group-layout.on { opacity: 1; color: var(--accent, #2383E2); }
+.canvas-group-head > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.cvp-h { font-weight: 600; font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; opacity: .55; margin-top: 4px; }
+.cvp-var { flex: none; width: 30px; height: 24px; border: 0; border-radius: 6px; background: color-mix(in srgb, currentColor 5%, transparent); color: inherit; font: inherit; font-size: 11px; cursor: pointer; padding: 0 2px; }
+.cvp-var.on { width: auto; max-width: 30px; color: var(--accent, #2383E2); }
+.cvp-varname { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px; border-radius: 7px; background: color-mix(in srgb, var(--accent, #2383E2) 10%, transparent); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: auto !important; opacity: 1 !important; }
+.cvp-varname::before { content: ''; width: 12px; height: 12px; border-radius: 3px; background: var(--sw); box-shadow: inset 0 0 0 1px rgba(0,0,0,.15); flex: none; }
+.cvp-name { font-family: inherit !important; }
+.cvp-tsample { width: 28px !important; flex: none; opacity: 1 !important; text-align: center; overflow: hidden; }
+
+.cvp-var { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 24px !important; height: 24px; flex: none; border-radius: 6px; opacity: .6 !important; cursor: pointer; }
+.cvp-var.on { opacity: 1 !important; color: var(--accent, #2383E2); background: color-mix(in srgb, var(--accent, #2383E2) 10%, transparent); }
+.cvp-var select { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; }
+.cvp-cname { flex: 1; min-width: 0; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: auto !important; opacity: 1 !important; }

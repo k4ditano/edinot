@@ -67,6 +67,8 @@ export function readCanvasSnapshot(ydoc) {
     // Estado de sesión compartido (temporizador, votación). Vive en el mapa
     // meta y NO va al espejo Markdown: cambia a menudo y es efímero.
     ...(t.meta.get('session') ? { session: t.meta.get('session') } : {}),
+    // Variables del diseño (colores y estilos de texto con nombre). Sí van al espejo Markdown.
+    ...(t.meta.get('vars') ? { vars: t.meta.get('vars') } : {}),
   };
 }
 
@@ -93,6 +95,7 @@ export function seedCanvasFromJson(ydoc, json) {
     if (t.annotations.length === 0 && Array.isArray(json.annotations)) {
       for (const a of json.annotations) t.annotations.push([objToYMap(a)]);
     }
+    if (json.vars && typeof json.vars === 'object' && !t.meta.get('vars')) t.meta.set('vars', json.vars);
     t.meta.set('migrated', true);
   });
   return true;
@@ -157,6 +160,11 @@ export function applyCanvasSnapshot(ydoc, next) {
     reconcileCanvasArray(t.edges, edges, canvasEdgeKey);
     reconcileCanvasArray(t.groups, Array.isArray(next.groups) ? next.groups : [], g => g.id);
     reconcileCanvasArray(t.annotations, Array.isArray(next.annotations) ? next.annotations : [], a => a.id);
+    if ('vars' in next) {
+      const cur = t.meta.get('vars') || null;
+      const nv = next.vars || null;
+      if (JSON.stringify(cur) !== JSON.stringify(nv)) { if (nv) t.meta.set('vars', nv); else t.meta.delete('vars'); }
+    }
     if ('session' in next) {
       const cur = t.meta.get('session') || null;
       const nv = next.session || null;
@@ -183,5 +191,6 @@ export function serializeCanvasDeterministic(ydoc) {
     groups: snap.groups.map(sortedObj),
   };
   if (snap.annotations.length) norm.annotations = snap.annotations.map(sortedObj);
+  if (snap.vars) norm.vars = snap.vars;
   return JSON.stringify(norm, null, 2);
 }
