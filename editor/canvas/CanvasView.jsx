@@ -12,7 +12,7 @@ import { smartPairs, frameItems, playEnter } from './motion.js';
 import { booleanOp, canBoolean } from '../../shared/canvas-boolean.js';
 import { normalizePath, transformPath, pathBbox, arcsToCubics } from '../../shared/svg-import.js';
 import { interactionsOf, condOk, withVar, frameInteractions } from './interactions.js';
-import { listComponents, createComponent, insertInstance, syncInstances, detachInstances, addVariant, switchVariant, variantsOf, libraryEntryFrom, publishToLibrary, insertFromLibrary, resetOverrides, setInstanceProp } from './components.js';
+import { listComponents, createComponent, insertInstance, syncInstances, detachInstances, addVariant, switchVariant, variantsOf, libraryEntryFrom, publishToLibrary, insertFromLibrary, resetOverrides, setInstanceProp, instKey } from './components.js';
 import { resolveVars, findVar, varValue } from '../../shared/canvas-vars.js';
 import { applyAutoLayout, applyConstraints, frameTree, frameRect } from './autolayout.js';
 import { itemCssText } from '../../shared/canvas-css.js';
@@ -3380,12 +3380,14 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
         return null;
       }
       case 'variant': {
-        if (!item || !item.grp) return null;
-        const inst = [...(j.nodes || []), ...(j.annotations || [])].find(x => x.grp === item.grp && x.cinst);
+        // La pieza puede ser de una instancia anidada (botón dentro de una tarjeta): manda la instancia más cercana.
+        const holder = item && item.cinst ? item : item && item.grp ? [...(j.nodes || []), ...(j.annotations || [])].find(x => x.grp === item.grp && x.cinst) : null;
+        if (!holder) return null;
+        const inst = holder;
         if (!inst) return null;
         const v = variantsOf(j, inst.cinst).find(x => x.id === inter.target || String(x.variant).toLowerCase() === String(inter.target).toLowerCase());
         if (!v || v.id === inst.cinst) return null;
-        const grp = item.grp;
+        const grp = instKey(inst);
         return pushProto((jj) => switchVariant(jj, grp, v.id, (p) => p + 'proto' + grp));
       }
       case 'setVar': {
@@ -4170,7 +4172,7 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
                     if (r.ids) { onChange(() => r.json); setSelected(new Set(r.ids.nodes)); setSelAnno(new Set(r.ids.annos)); }
                   } });
                   if (items.some(x => x.cinst)) out.push({ label: t('canvas.cmp.detach'), onSelect: () => onChange(j => detachInstances(j, [...selected], [...selAnno])) });
-                  if (items.some(x => x.cinst)) out.push({ label: t('canvas.cmp.reset'), onSelect: () => { const g = items.find(x => x.cinst).grp; onChange(j => resetOverrides(j, g, library)); } });
+                  if (items.some(x => x.cinst)) out.push({ label: t('canvas.cmp.reset'), onSelect: () => { const g = instKey(items.find(x => x.cinst)); onChange(j => resetOverrides(j, g, library)); } });
                   if (items.some(x => x.cmain)) out.push({ label: library.some(e => e.id === cid) ? t('canvas.lib.update') : t('canvas.lib.publish'), onSelect: () => {
                     const entry = libraryEntryFrom(json, cid);
                     if (entry) yMeta.set('componentLibrary', publishToLibrary(library, entry));
@@ -4184,11 +4186,11 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
                   const inst = items.find(x => x.cinst);
                   const vars2 = inst ? variantsOf(json, inst.cinst) : [];
                   if (inst && vars2.length > 1) out.push({ label: t('canvas.cmp.variant'), submenu: () => vars2.map(v => ({ label: v.variant, checked: v.id === inst.cinst ? true : undefined,
-                    onSelect: () => onChange(j => syncInstances(switchVariant(j, inst.grp, v.id, (p) => (p === 'n' ? canvasNodeId() : canvasAnnoId())))) })) });
+                    onSelect: () => onChange(j => syncInstances(switchVariant(j, instKey(inst), v.id, (p) => (p === 'n' ? canvasNodeId() : canvasAnnoId())))) })) });
                   // Cambiar la instancia por otro componente (instance swap): se queda en su sitio con sus textos.
                   const others = inst ? listComponents(json).filter(c => c.id !== inst.cinst && !vars2.some(v => v.id === c.id)) : [];
                   if (inst && others.length) out.push({ label: t('canvas.cmp.swap'), submenu: () => others.map(c => ({ label: c.name,
-                    onSelect: () => onChange(j => syncInstances(switchVariant(j, inst.grp, c.id, (p) => (p === 'n' ? canvasNodeId() : canvasAnnoId())), library)) })) });
+                    onSelect: () => onChange(j => syncInstances(switchVariant(j, instKey(inst), c.id, (p) => (p === 'n' ? canvasNodeId() : canvasAnnoId())), library)) })) });
                 }
                 return out;
               })(),

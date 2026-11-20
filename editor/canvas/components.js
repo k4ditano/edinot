@@ -6,9 +6,16 @@
 //   cinst: '<id del componente>', cref: '<id de la pieza del principal que copia>', grp: '<grupo propio>'
 // Al cambiar el principal, `syncInstances` rehace cada instancia con las propiedades del principal, en su sitio, y
 // conservando su propio texto (cada botón puede decir algo distinto). «Desvincular» la convierte en piezas normales.
+//
+// Instancias anidadas: un componente puede llevar dentro instancias de otro (una «Tarjeta» con un «Botón»). Esas
+// piezas son a la vez del principal de fuera (`cmain`, `grp` del principal) e instancia del de dentro (`cinst`,
+// `cref`), y su grupo de instancia va en `igrp`. Al cambiar el «Botón», se rehace el de dentro de la «Tarjeta» y, en
+// la siguiente vuelta, cada instancia de la «Tarjeta»: el cambio llega hasta el final.
 
 const POS_N = ['x', 'y'];
-const OWN = new Set(['id', 'grp', 'cmain', 'cname', 'cinst', 'cref', 'clib', 'z', 'locked', 'hidden', 'link']);
+const OWN = new Set(['id', 'grp', 'igrp', 'cmain', 'cname', 'cinst', 'cref', 'clib', 'z', 'locked', 'hidden', 'link']);
+/** Grupo de instancia de una pieza (el propio si está anidada dentro de un principal). */
+export const instKey = (it) => it.igrp || it.grp;
 const KEEP_TEXT = new Set(['text']);
 
 const rnd = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -44,7 +51,8 @@ export function createComponent(json, nodeIds, annoIds, name) {
   const cid = 'cmp' + rnd(), g = 'lg' + rnd();
   const N = new Set(nodeIds), A = new Set(annoIds);
   if (!N.size && !A.size) return { json, id: null };
-  const tag = (it) => ({ ...it, cmain: cid, cname: name, grp: g });
+  // Las instancias que quedan dentro pasan a ser instancias anidadas: su grupo de instancia se guarda en `igrp`.
+  const tag = (it) => { const r = { ...it, cmain: cid, cname: name, grp: g, ...(it.cinst ? { igrp: instKey(it) } : {}) }; if (it.cinst) { delete r.cset; delete r.cvariant; } return r; };
   return {
     id: cid,
     json: { ...json, nodes: (json.nodes || []).map(n => (N.has(n.id) ? tag(n) : n)), annotations: (json.annotations || []).map(a => (A.has(a.id) ? tag(a) : a)) },
@@ -63,7 +71,7 @@ export function insertInstance(json, cid, at, newId = (p) => p + rnd()) {
   const target = at || { x: right + 40, y: oy };
   const dx = target.x - ox, dy = target.y - oy;
   const g = 'lg' + rnd();
-  const strip = (it) => { const r = { ...it }; delete r.cmain; delete r.cname; delete r.z; delete r.link; return r; };
+  const strip = (it) => { const r = { ...it }; delete r.cmain; delete r.cname; delete r.z; delete r.link; delete r.igrp; return r; };
   // Orden de apilado: la instancia va encima de todo, con sus piezas en el mismo orden que en el principal.
   const effN = (n, i) => (n.z != null ? n.z : i), effA = (x, i) => (typeof x.z === 'number' ? x.z : (x.layer === 'back' ? -1e9 + i : 1e9 + i));
   const allZ = [...(json.nodes || []).map(effN), ...(json.annotations || []).map(effA)];
@@ -79,8 +87,18 @@ export function insertInstance(json, cid, at, newId = (p) => p + rnd()) {
   };
 }
 
-/** Rehace las instancias a partir de su principal. Devuelve el mismo objeto si ya están al día. */
+/** Rehace las instancias a partir de su principal (de dentro afuera, para las anidadas). El mismo objeto si ya están al día. */
 export function syncInstances(json, library = null) {
+  let j = json;
+  for (let pass = 0; pass < 6; pass++) {
+    const next = syncOnce(j, library);
+    if (next === j) break;
+    j = next;
+  }
+  return j;
+}
+
+function syncOnce(json, library) {
   const nodes = json.nodes || [], annos = json.annotations || [];
   if (!nodes.some(n => n.cinst) && !annos.some(a => a.cinst)) return json;
   const mainById = new Map([...nodes.filter(n => n.cmain).map(n => [n.id, { it: n, kind: 'n' }]), ...annos.filter(a => a.cmain).map(a => [a.id, { it: a, kind: 'a' }])]);
@@ -95,9 +113,9 @@ export function syncInstances(json, library = null) {
       const m = mainById.get(it.cref);
       if (!m) continue;
       const w = worldOf(it, kind), mw = worldOf(m.it, m.kind);
-      const a = acc.get(it.grp) || { ix: Infinity, iy: Infinity, mx: Infinity, my: Infinity };
+      const a = acc.get(instKey(it)) || { ix: Infinity, iy: Infinity, mx: Infinity, my: Infinity };
       a.ix = Math.min(a.ix, w.x); a.iy = Math.min(a.iy, w.y); a.mx = Math.min(a.mx, mw.x); a.my = Math.min(a.my, mw.y);
-      acc.set(it.grp, a);
+      acc.set(instKey(it), a);
     }
   }
   const delta = new Map([...acc].map(([g, a]) => [g, { x: a.ix - a.mx, y: a.iy - a.my }]));
@@ -106,12 +124,13 @@ export function syncInstances(json, library = null) {
   const rebuild = (it, kind) => {
     if (!it.cinst) return it;
     const m = mainById.get(it.cref);
-    const d = delta.get(it.grp);
+    const d = delta.get(instKey(it));
     if (!m || !d) return it;
     // Anulaciones (como en Figma): lo que la instancia tiene distinto de lo que el principal tenía en la última
     // sincronización (`cbase`) es un cambio propio y se conserva; lo demás sigue al principal. Sin `cbase`
     // (instancias antiguas), lo que difiera del principal.
-    const skip = (k) => OWN.has(k) || k === 'cbase' || k === 'cprop' || (kind === 'n' ? (k === 'x' || k === 'y') : (k === 'ox' || k === 'oy'));
+    // Las anidadas conservan su conjunto/variante (las del principal de fuera), no las del de dentro.
+    const skip = (k) => OWN.has(k) || k === 'cbase' || k === 'cprop' || (it.igrp && (k === 'cset' || k === 'cvariant')) || (kind === 'n' ? (k === 'x' || k === 'y') : (k === 'ox' || k === 'oy'));
     const keysAll = new Set([...Object.keys(m.it), ...Object.keys(it), ...Object.keys(it.cbase || {})].filter(k => !skip(k)));
     const next = {};
     const base = {};
@@ -123,8 +142,10 @@ export function syncInstances(json, library = null) {
       if (v !== undefined) next[k] = v;
       if (mv !== undefined) base[k] = mv;
     }
-    for (const k of OWN) if (it[k] !== undefined && k !== 'cmain' && k !== 'cname') next[k] = it[k];
+    // `cmain`/`cname` solo se quedan en las anidadas (son también piezas de un principal).
+    for (const k of OWN) if (it[k] !== undefined && ((k !== 'cmain' && k !== 'cname') || it.igrp)) next[k] = it[k];
     next.cbase = base;
+    if (it.igrp) for (const k of ['cset', 'cvariant', 'cprop']) if (it[k] !== undefined) next[k] = it[k];
     if (kind === 'n') { next.x = (m.it.x || 0) + d.x; next.y = (m.it.y || 0) + d.y; }
     else { next.ox = (m.it.ox || 0) + d.x; next.oy = (m.it.oy || 0) + d.y; }
     const round = (o) => JSON.stringify(o, (k, v) => (typeof v === 'number' ? Math.round(v * 100) / 100 : v));
@@ -133,15 +154,39 @@ export function syncInstances(json, library = null) {
     changed = true;
     return next;
   };
-  const n2 = nodes.map(n => rebuild(n, 'n')), a2 = annos.map(a => rebuild(a, 'a'));
+  let n2 = nodes.map(n => rebuild(n, 'n')), a2 = annos.map(a => rebuild(a, 'a'));
+  // Orden de apilado: dentro de cada instancia, las piezas se apilan como en su principal (sus mismos valores de z,
+  // repartidos en el orden del principal), así «mandar atrás» el fondo del principal llega a todas las copias.
+  const mz = (m) => (m.it.z != null ? m.it.z : (m.kind === 'a' ? (m.it.layer === 'back' ? -1e9 : 1e9) : 0));
+  const groups = new Map();
+  for (const [kind, arr] of [['n', n2], ['a', a2]]) arr.forEach((it, i) => {
+    if (!it.cinst || it.z == null) return;
+    const m = mainById.get(it.cref);
+    if (!m) return;
+    const k = instKey(it);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push({ kind, i, z: it.z, mz: mz(m) });
+  });
+  const zfix = { n: new Map(), a: new Map() };
+  for (const list of groups.values()) {
+    if (list.length < 2) continue;
+    const zs = list.map(x => x.z).sort((p, q) => p - q);
+    const byMain = [...list].sort((p, q) => p.mz - q.mz);
+    byMain.forEach((x, r) => { if (x.z !== zs[r]) zfix[x.kind].set(x.i, zs[r]); });
+  }
+  if (zfix.n.size || zfix.a.size) {
+    changed = true;
+    n2 = n2.map((it, i) => (zfix.n.has(i) ? { ...it, z: zfix.n.get(i) } : it));
+    a2 = a2.map((it, i) => (zfix.a.has(i) ? { ...it, z: zfix.a.get(i) } : it));
+  }
   return changed ? { ...json, nodes: n2, annotations: a2 } : json;
 }
 
 /** Convierte instancias en piezas normales (siguen agrupadas). */
 export function detachInstances(json, nodeIds, annoIds) {
   const N = new Set(nodeIds), A = new Set(annoIds);
-  const grps = new Set([...(json.nodes || []).filter(n => N.has(n.id) && n.cinst).map(n => n.grp), ...(json.annotations || []).filter(a => A.has(a.id) && a.cinst).map(a => a.grp)]);
-  const strip = (it) => { if (!it.cinst || !grps.has(it.grp)) return it; const { cinst, cref, ...r } = it; return r; };
+  const grps = new Set([...(json.nodes || []).filter(n => N.has(n.id) && n.cinst).map(instKey), ...(json.annotations || []).filter(a => A.has(a.id) && a.cinst).map(instKey)]);
+  const strip = (it) => { if (!it.cinst || !grps.has(instKey(it))) return it; const { cinst, cref, igrp, cbase, ...r } = it; return r; };
   return { ...json, nodes: (json.nodes || []).map(strip), annotations: (json.annotations || []).map(strip) };
 }
 
@@ -168,7 +213,8 @@ export function variantsOf(json, cid) {
 export function listComponentsFull(json) {
   const base = listComponents(json);
   return base.map(c => {
-    const it = [...(json.nodes || []), ...(json.annotations || [])].find(x => x.cmain === c.id) || {};
+    const all = [...(json.nodes || []), ...(json.annotations || [])];
+    const it = all.find(x => x.cmain === c.id && !x.igrp) || all.find(x => x.cmain === c.id) || {};
     return { ...c, set: it.cset || null, variant: it.cvariant || null };
   });
 }
@@ -203,11 +249,12 @@ export function addVariant(json, cid, variantName, newId = (p) => p + rnd()) {
 /** Cambia de variante la instancia cuyo grupo es `grp`. Después hay que llamar a syncInstances. */
 export function switchVariant(json, grp, targetCid, newId = (p) => p + rnd()) {
   const inst = [
-    ...(json.nodes || []).filter(n => n.grp === grp && n.cinst).map(it => ({ kind: 'n', it })),
-    ...(json.annotations || []).filter(a => a.grp === grp && a.cinst).map(it => ({ kind: 'a', it })),
+    ...(json.nodes || []).filter(n => instKey(n) === grp && n.cinst).map(it => ({ kind: 'n', it })),
+    ...(json.annotations || []).filter(a => instKey(a) === grp && a.cinst).map(it => ({ kind: 'a', it })),
   ];
   if (!inst.length) return json;
   const cur = inst[0].it.cinst;
+  const outer = inst[0].it.igrp ? { grp: inst[0].it.grp, cmain: inst[0].it.cmain, cname: inst[0].it.cname } : null;
   const curMain = mainItemsOf(json, cur), target = mainItemsOf(json, targetCid);
   if (!target.length || cur === targetCid) return json;
   const pos = (ref) => curMain.findIndex(m => m.it.id === ref);
@@ -228,7 +275,9 @@ export function switchVariant(json, grp, targetCid, newId = (p) => p + rnd()) {
   const build = (tm, i) => {
     const it = { ...tm.it };
     for (const k of ['cmain', 'cname', 'cset', 'cvariant', 'link']) delete it[k];
-    it.id = keepIds.get(tm.it.id); it.grp = grp; it.cinst = targetCid; it.cref = tm.it.id; it.z = z0 + rank.get(tm.it.id);
+    it.id = keepIds.get(tm.it.id); it.cinst = targetCid;
+    // Anidada (dentro de un principal): sigue siendo pieza de ese principal; su grupo de instancia va en `igrp`.
+    if (outer) { it.grp = outer.grp; it.igrp = grp; it.cmain = outer.cmain; it.cname = outer.cname; } else it.grp = grp; it.cref = tm.it.id; it.z = z0 + rank.get(tm.it.id);
     // Lo propio de la pieza de la instancia (interacciones del prototipo, enlace) se queda con ella.
     const old = inst[i] && inst[i].kind === tm.kind ? inst[i].it : null;
     if (old) for (const k of ['interactions', 'link', 'linkMode', 'linkAnim', 'name']) if (old[k] !== undefined) it[k] = old[k];
@@ -298,13 +347,13 @@ export function libraryMains(library) {
 
 /** «Restablecer anulaciones»: la instancia (grupo `grp`) vuelve a ser idéntica a su principal (salvo su sitio). */
 export function resetOverrides(json, grp, library = null) {
-  const strip = (it) => (it.grp === grp && it.cinst ? (({ cbase, text, ...r }) => ({ ...r, cbase: {} }))(it) : it);
+  const strip = (it) => (instKey(it) === grp && it.cinst ? (({ cbase, text, ...r }) => ({ ...r, cbase: {} }))(it) : it);
   const j = { ...json, nodes: (json.nodes || []).map(strip), annotations: (json.annotations || []).map(strip) };
   // Con cbase vacío, todo lo que la instancia tenga distinto contaría como anulación: se vacía también eso.
   const mains = new Map([...(json.nodes || []), ...(json.annotations || [])].filter(x => x.cmain).map(x => [x.id, x]));
   if (library) for (const m of libraryMains(library)) if (!mains.has(m.it.id)) mains.set(m.it.id, m.it);
   const clear = (it) => {
-    if (it.grp !== grp || !it.cinst) return it;
+    if (instKey(it) !== grp || !it.cinst) return it;
     const m = mains.get(it.cref);
     if (!m) return it;
     const r = { ...it };
@@ -327,12 +376,12 @@ export function componentProps(json, cid, library = null) {
 
 /** Da a la instancia (grupo `grp`) el valor `value` en la propiedad `name` (texto o mostrar/ocultar). */
 export function setInstanceProp(json, grp, name, value, library = null) {
-  const inst = [...(json.nodes || []), ...(json.annotations || [])].find(x => x.grp === grp && x.cinst);
+  const inst = [...(json.nodes || []), ...(json.annotations || [])].find(x => instKey(x) === grp && x.cinst);
   if (!inst) return json;
   const prop = componentProps(json, inst.cinst, library).find(p => p.name.toLowerCase() === String(name).toLowerCase());
   if (!prop) return json;
   const apply = (it) => {
-    if (it.grp !== grp || it.cref !== prop.ref) return it;
+    if (instKey(it) !== grp || it.cref !== prop.ref) return it;
     if (prop.type === 'bool') { const r = { ...it }; if (value === false || value === 'false') r.hidden = true; else delete r.hidden; return r; }
     return { ...it, text: String(value) };
   };

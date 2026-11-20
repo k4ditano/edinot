@@ -164,3 +164,45 @@ test('instance swap: an instance becomes another component, in place, keeping it
   assert.equal(s.nodes.find(n => n.grp === ids.grp).text, 'Comprar');
   assert.equal(s.annotations.find(a => a.grp === ids.grp).shape, 'ellipse');
 });
+
+test('nested instances: a Button inside a Card main; changing the Button reaches every Card instance, overrides kept', async () => {
+  const { listComponentsFull, setInstanceProp } = await import('../editor/canvas/components.js');
+  const b = base();                              // botón: bg + lbl
+  const { json: j1, id: cBtn } = createComponent(b, ['lbl'], ['bg'], 'Botón');
+  let { json: j2, ids: btnIn } = insertInstance(j1, cBtn, { x: 20, y: 400 }, id);
+  // la tarjeta: un fondo grande y la instancia del botón dentro
+  j2 = { ...j2, annotations: [...j2.annotations, { id: 'card', kind: 'shape', shape: 'rect', x: 0, y: 380, w: 300, h: 160, fill: '#fff', bbox: { x: 0, y: 380, w: 300, h: 160 } }] };
+  const { json: j3, id: cCard } = createComponent(j2, btnIn.nodes, ['card', ...btnIn.annos], 'Tarjeta');
+  let { json: j4, ids: cardA } = insertInstance(j3, cCard, { x: 600, y: 380 }, id);
+  let { json: j5, ids: cardB } = insertInstance(j4, cCard, { x: 1000, y: 380 }, id);
+  j5 = syncInstances(j5);
+  assert.equal(listComponentsFull(j5).find(c => c.id === cCard).set, null);   // la tarjeta no hereda el conjunto del botón
+  // la tarjeta B cambia el texto de su botón (anulación)
+  const lblB = j5.nodes.find(n => n.grp === cardB.grp && n.kind === 'label');
+  j5 = { ...j5, nodes: j5.nodes.map(n => (n.id === lblB.id ? { ...n, text: 'Ver más' } : n)) };
+  // el botón original cambia de color
+  j5 = { ...j5, annotations: j5.annotations.map(a => (a.id === 'bg' ? { ...a, fill: '#22c55e' } : a)) };
+  const out = syncInstances(j5);
+  const fillOf = (grp) => out.annotations.find(a => a.grp === grp && a.shape === 'rect' && a.cref !== 'card' && a.fill !== '#fff').fill;
+  // dentro del principal de la tarjeta
+  assert.equal(out.annotations.find(a => a.cmain === cCard && a.cinst === cBtn).fill, '#22c55e');
+  assert.equal(fillOf(cardA.grp), '#22c55e');
+  assert.equal(fillOf(cardB.grp), '#22c55e');
+  assert.equal(out.nodes.find(n => n.id === lblB.id).text, 'Ver más');
+  // el botón anidado sigue en su sitio dentro de cada tarjeta
+  const bgA = out.annotations.find(a => a.grp === cardA.grp && a.fill === '#22c55e');
+  assert.equal(Math.round(bgA.bbox.x + (bgA.ox || 0)), 620);
+  assert.ok(setInstanceProp);
+});
+
+test('instances follow the stacking order of their main', () => {
+  const b = base();
+  b.annotations[0].z = 5; b.nodes[0].z = 1;            // en el principal, el texto está debajo del fondo
+  const { json, id: cid } = createComponent(b, ['lbl'], ['bg'], 'Botón');
+  let { json: j, ids } = insertInstance(json, cid, { x: 300, y: 0 }, id);
+  // el principal sube el texto por encima del fondo
+  j = { ...j, nodes: j.nodes.map(n => (n.id === 'lbl' ? { ...n, z: 9 } : n)) };
+  const out = syncInstances(j);
+  const tx = out.nodes.find(n => n.id === ids.nodes[0]), bg = out.annotations.find(a => a.id === ids.annos[0]);
+  assert.ok(tx.z > bg.z);
+});

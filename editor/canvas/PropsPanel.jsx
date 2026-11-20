@@ -7,7 +7,7 @@ import { t, useI18n } from '../../i18n.js';
 import { mergedOrder } from './zorder.js';
 import { FONT_KEYS, FONT_STACKS, weightOf, labelTextStyle } from '../../shared/text-style.js';
 import { resolveVars, newVarId, textStyleFrom } from '../../shared/canvas-vars.js';
-import { listComponents, insertInstance, componentProps, variantsOf } from './components.js';
+import { listComponents, insertInstance, componentProps, variantsOf, instKey } from './components.js';
 import { ENTER_TYPES, HOVER_TYPES, LOOP_TYPES, LINK_ANIMS, playEnter } from './motion.js';
 import { frameTree } from './autolayout.js';
 import { layerTree, layerItems, moveLayers, renameLayer } from './layers.js';
@@ -136,7 +136,7 @@ function CompProps({ json, item, library, patch, onSetProp }) {
   if (item.cinst) {
     const props = componentProps(json, item.cinst, library);
     if (!props.length) return null;
-    const pieces = [...(json.nodes || []), ...(json.annotations || [])].filter(x => x.grp === item.grp && x.cinst);
+    const pieces = [...(json.nodes || []), ...(json.annotations || [])].filter(x => instKey(x) === instKey(item) && x.cinst);
     return (
       <>
         <div className="cvp-h">{t('cvp.cp.title')}</div>
@@ -144,11 +144,11 @@ function CompProps({ json, item, library, patch, onSetProp }) {
           const piece = pieces.find(x => x.cref === p.ref);
           if (!piece) return null;
           return p.type === 'bool' ? (
-            <label key={p.name} className="cvp-check"><input type="checkbox" checked={!piece.hidden} onChange={(e) => onSetProp && onSetProp(item.grp, p.name, e.target.checked)} /> {p.name}</label>
+            <label key={p.name} className="cvp-check"><input type="checkbox" checked={!piece.hidden} onChange={(e) => onSetProp && onSetProp(instKey(item), p.name, e.target.checked)} /> {p.name}</label>
           ) : (
             <div key={p.name} className="cvp-color"><span>{p.name}</span>
               <input className="cvp-hex cvp-name" defaultValue={piece.text || ''} onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter') e.currentTarget.blur(); }}
-                onBlur={(e) => { if (e.target.value !== (piece.text || '')) onSetProp && onSetProp(item.grp, p.name, e.target.value); }} />
+                onBlur={(e) => { if (e.target.value !== (piece.text || '')) onSetProp && onSetProp(instKey(item), p.name, e.target.value); }} />
             </div>
           );
         })}

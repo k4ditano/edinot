@@ -14,7 +14,7 @@ import { booleanOp, canBoolean } from '../shared/canvas-boolean.js';
 import { outlineStroke } from '../editor/canvas/outline.js';
 import { pagesOf, addPage, renamePage, removePage, moveToPage } from '../editor/canvas/pages.js';
 import { selectionUnits, alignUnits, spaceUnits, tidyUp, mainAxis, currentGap, selectSame, replaceText } from '../editor/canvas/arrange.js';
-import { createComponent, insertInstance, syncInstances, listComponents, addVariant, switchVariant, variantsOf, libraryEntryFrom, publishToLibrary, insertFromLibrary, componentProps, setInstanceProp, resetOverrides } from '../editor/canvas/components.js';
+import { createComponent, insertInstance, syncInstances, listComponents, addVariant, switchVariant, variantsOf, libraryEntryFrom, publishToLibrary, insertFromLibrary, componentProps, setInstanceProp, resetOverrides, instKey } from '../editor/canvas/components.js';
 import { applyAutoLayout, applyConstraints, frameRect } from '../editor/canvas/autolayout.js';
 import { itemCssText } from '../shared/canvas-css.js';
 import { canMask } from '../shared/canvas-mask.js';
@@ -5609,7 +5609,9 @@ server.tool(
   'create_canvas_component',
   'Turn canvas items into a reusable component (like Figma): e.g. a button = its rect + its label. Then place '
   + 'instances with insert_canvas_component. Editing the main component later (update_canvas_annotation / '
-  + 'update_canvas_node on its items) updates every instance; each instance keeps its own text.',
+  + 'update_canvas_node on its items) updates every instance; each instance keeps its own text. Nested components: '
+  + 'include the pieces of an instance of another component (e.g. a Card with a Button instance inside) — changing '
+  + 'the Button main then updates the Button inside the Card and every Card instance.',
   { name: z.string(), title: z.string(), nodeIds: z.array(z.string()).optional(), annotationIds: z.array(z.string()).optional() },
   async ({ name, title, nodeIds = [], annotationIds = [] }) => withSession(async (s) => {
     const { f, content, block } = await ensureCanvas(s, name);
@@ -5691,15 +5693,15 @@ server.tool(
       next = { ...next, nodes: (next.nodes || []).map(patchIt), annotations: (next.annotations || []).map(patchIt) };
     } else if (action === 'set') {
       if (!it.cinst) throw new Error('set works on a piece of an instance');
-      for (const [k, v] of Object.entries(values || {})) next = setInstanceProp(next, it.grp, k, v, lib);
+      for (const [k, v] of Object.entries(values || {})) next = setInstanceProp(next, instKey(it), k, v, lib);
     } else if (action === 'reset') {
       if (!it.cinst) throw new Error('reset works on a piece of an instance');
-      next = resetOverrides(next, it.grp, lib);
+      next = resetOverrides(next, instKey(it), lib);
     } else if (action === 'swap') {
       // Instance swap: la instancia pasa a ser de otro componente, en el mismo sitio y con sus textos.
       if (!it.cinst) throw new Error('swap works on a piece of an instance');
       const c = findComponent(next, component || '');
-      next = syncInstances(switchVariant(next, it.grp, c.id), lib);
+      next = syncInstances(switchVariant(next, instKey(it), c.id), lib);
     }
     await commitCanvas(s, f.id, next, { content, block });
     return json({ ok: true });
@@ -5732,7 +5734,7 @@ server.tool(
     if (!it || !it.cinst) throw new Error('that item is not part of a component instance');
     const v = variantsOf(block.json, it.cinst).find(x => x.variant.toLowerCase() === variant.toLowerCase() || x.id === variant);
     if (!v) throw new Error(`variant not found: ${variant} (have: ${variantsOf(block.json, it.cinst).map(x => x.variant).join(', ')})`);
-    await commitCanvas(s, f.id, switchVariant(block.json, it.grp, v.id, (p) => newCanvasId(p === 'n' ? 'n' : 'ann')), { content, block });
+    await commitCanvas(s, f.id, switchVariant(block.json, instKey(it), v.id, (p) => newCanvasId(p === 'n' ? 'n' : 'ann')), { content, block });
     return json({ ok: true });
   }),
 );
