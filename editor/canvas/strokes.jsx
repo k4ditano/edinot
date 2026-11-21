@@ -106,25 +106,44 @@ export const ptsBbox = (pts) => {
 export function strokeOutlineD(pts, size) {
   const n = pts.length;
   if (n === 0) return '';
-  const radiusAt = (p) => Math.max(0.5, (size * (0.35 + (p == null ? 0.5 : p) * 0.65)) / 2);
+  const radiusAt = (p) => Math.max(0.4, (size * (0.35 + (p == null ? 0.5 : p) * 0.65)) / 2);
   if (n === 1) {
     const [x, y, p] = pts[0];
     const r = radiusAt(p);
     return `M ${(x - r).toFixed(1)} ${y.toFixed(1)} a ${r.toFixed(1)} ${r.toFixed(1)} 0 1 0 ${(r * 2).toFixed(1)} 0 a ${r.toFixed(1)} ${r.toFixed(1)} 0 1 0 ${(-r * 2).toFixed(1)} 0 z`;
   }
+  // Puntas afinadas: el grosor crece al empezar y se afina al acabar (en una longitud proporcional al grosor).
+  const acc = [0];
+  for (let i = 1; i < n; i++) acc.push(acc[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+  const total = acc[n - 1];
+  const taper = Math.min(total / 3, size * 2.5);
+  const tf = (i) => {
+    if (!taper) return 1;
+    const a = Math.min(1, acc[i] / taper), b = Math.min(1, (total - acc[i]) / taper);
+    const e = (v) => 1 - (1 - v) * (1 - v);   // suave
+    return 0.3 + 0.7 * e(Math.min(a, b));
+  };
   const left = [], right = [];
   for (let i = 0; i < n; i++) {
     const cur = pts[i], prev = pts[Math.max(0, i - 1)], next = pts[Math.min(n - 1, i + 1)];
     let nx = next[0] - prev[0], ny = next[1] - prev[1];
     const len = Math.hypot(nx, ny) || 1; nx /= len; ny /= len;
-    const r = radiusAt(cur[2]);
+    const r = radiusAt(cur[2]) * tf(i);
     const px = -ny, py = nx; // perpendicular
     left.push([cur[0] + px * r, cur[1] + py * r]);
     right.push([cur[0] - px * r, cur[1] - py * r]);
   }
-  const fwd = left.map((p, i) => (i ? 'L' : 'M') + ` ${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' ');
-  const back = right.reverse().map(p => `L ${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' ');
-  return `${fwd} ${back} Z`;
+  // Bordes curvos (cuadráticas por los puntos medios) y extremos redondeados.
+  const f = (v) => v.toFixed(1);
+  const curve = (arr) => {
+    let d = '';
+    for (let i = 1; i < arr.length - 1; i++) { const m = cpMid(arr[i], arr[i + 1]); d += ` Q ${f(arr[i][0])} ${f(arr[i][1])} ${f(m[0])} ${f(m[1])}`; }
+    const l = arr[arr.length - 1];
+    return d + ` L ${f(l[0])} ${f(l[1])}`;
+  };
+  const back = right.reverse();
+  const rEnd = Math.max(0.3, radiusAt(pts[n - 1][2]) * tf(n - 1)), rStart = Math.max(0.3, radiusAt(pts[0][2]) * tf(0));
+  return `M ${f(left[0][0])} ${f(left[0][1])}${curve(left)} A ${f(rEnd)} ${f(rEnd)} 0 0 1 ${f(back[0][0])} ${f(back[0][1])}${curve(back)} A ${f(rStart)} ${f(rStart)} 0 0 1 ${f(left[0][0])} ${f(left[0][1])} Z`;
 }
 
 // Filled arrowhead triangle at (x2,y2), sized to the stroke width and pointing

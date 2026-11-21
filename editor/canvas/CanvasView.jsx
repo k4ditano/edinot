@@ -17,6 +17,7 @@ import { resolveVars, findVar, varValue } from '../../shared/canvas-vars.js';
 import { applyAutoLayout, applyConstraints, frameTree, frameRect } from './autolayout.js';
 import { itemCssText } from '../../shared/canvas-css.js';
 import { snapMove, annoBoxes, measureBetween } from './guides.js';
+import { createInk, eventSamples, withPrediction } from './ink.js';
 import { markerSvg, outlineStroke } from './outline.js';
 import { pagesOf, filterPage, tagNew, addPage, renamePage, removePage, moveToPage } from './pages.js';
 import { selectionUnits, alignUnits, spaceUnits, tidyUp, mainAxis, currentGap, selectSame, SAME_KINDS, replaceText } from './arrange.js';
@@ -185,6 +186,9 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
   // annotation layer (see CANVAS_DRAW_TOOLS).
   const [tool, setTool] = useState('select');
   const [drawStyle, setDrawStyle] = useState({ color: '#1f2937', size: 4, opacity: 1, fill: false, eraser: 18 });
+  // Ajustes de la tinta a mano (en este equipo): suavizado 0…10, curva de presión y predicción.
+  const [inkPrefs, setInkPrefs0] = useState(() => { try { return { stabilize: 3, gamma: 1, predict: true, ...JSON.parse(localStorage.getItem('edinotInk') || '{}') }; } catch { return { stabilize: 3, gamma: 1, predict: true }; } });
+  const setInkPrefs = (fn) => setInkPrefs0(p => { const n = typeof fn === 'function' ? fn(p) : { ...p, ...fn }; try { localStorage.setItem('edinotInk', JSON.stringify(n)); } catch {} return n; });
   const [snapGrid, setSnapGrid] = useState(false);
   const [selAnno, setSelAnno] = useState(() => new Set()); // selected annotation ids
   const [annoTextEdit, setAnnoTextEdit] = useState(null);  // annotation id whose text is being edited
@@ -1286,27 +1290,37 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
       return;
     }
 
-    // Pen / highlighter freehand stroke (pressure-aware).
-    drawingRef.current = { points: [[start.x, start.y, e.pressure || 0.5]] };
+    // Lápiz / rotulador a mano: todas las muestras del puntero, estabilizador, curva de presión, inclinación
+    // (o presión simulada con el ratón) y la predicción del navegador para que la tinta vaya pegada a la punta.
+    const ink = createInk({ stabilize: inkPrefs.stabilize, gamma: inkPrefs.gamma, simulate: e.pointerType === 'mouse' });
+    const sampleOf = (s) => { const w = screenToWorld(s.clientX, s.clientY); return { x: w.x, y: w.y, pressure: s.pressure, tiltX: s.tiltX, tiltY: s.tiltY, t: s.timeStamp }; };
+    ink.add(sampleOf(e));
+    drawingRef.current = { points: ink.points, predicted: [] };
     const renderPreview = () => {
-      const pts = drawingRef.current.points;
+      const pts = withPrediction(drawingRef.current.points, drawingRef.current.predicted);
       const d = tool === 'pen' ? strokeOutlineD(pts, style.size) : smoothStrokeD(pts);
       setLivePreview({ kind: 'path', tool, d, color: style.color, size: style.size, opacity: style.opacity });
     };
     renderPreview();
     const onMove = (ev) => {
       if (ev.buttons === 0) { onUp(ev); return; }
-      const p = screenToWorld(ev.clientX, ev.clientY);
-      const last = drawingRef.current.points[drawingRef.current.points.length - 1];
-      // Drop near-duplicate samples so the path stays light.
-      if (Math.hypot(p.x - last[0], p.y - last[1]) < 1.2 / (viewportRef.current.zoom || 1)) return;
-      drawingRef.current.points.push([p.x, p.y, ev.pressure || 0.5]);
+      if (!drawingRef.current) return;
+      const { samples, predicted } = eventSamples(ev, { predicted: true });
+      const minD = 0.8 / (viewportRef.current.zoom || 1);
+      for (const s of samples) {
+        const q = sampleOf(s);
+        const last = ink.points[ink.points.length - 1];
+        if (last && Math.hypot(q.x - last[0], q.y - last[1]) < minD && ink.points.length > 1) continue;
+        ink.add(q);
+      }
+      drawingRef.current.predicted = inkPrefs.predict ? predicted.map(sampleOf) : [];
       renderPreview();
     };
     const onUp = () => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
-      const pts = drawingRef.current ? drawingRef.current.points : [];
+      if (drawingRef.current) ink.finish();
+      const pts = drawingRef.current ? ink.points : [];
       drawingRef.current = null; setLivePreview(null);
       if (pts.length < 2) return;
       const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
@@ -3878,6 +3892,19 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
             onChange={(e) => setDrawStyle(s => ({ ...s, size: Number(e.target.value) }))}
             title={t('canvas.strokeTip')} style={{ width: 90 }} />
           <span className="canvas-style-num">{drawStyle.size}</span>
+          {(tool === 'pen' || tool === 'highlighter') && (
+            <>
+              <span className="fmt-sep" />
+              <span className="canvas-style-label">{t('canvas.ink.smooth')}</span>
+              <input type="range" min="0" max="10" step="1" value={inkPrefs.stabilize}
+                onChange={(e) => setInkPrefs({ stabilize: Number(e.target.value) })} title={t('canvas.ink.smoothTip')} style={{ width: 70 }} />
+              {tool === 'pen' && (
+                <select className="canvas-style-select" value={String(inkPrefs.gamma)} title={t('canvas.ink.pressureTip')} onChange={(e) => setInkPrefs({ gamma: Number(e.target.value) })}>
+                  <option value="0.6">{t('canvas.ink.soft')}</option><option value="1">{t('canvas.ink.normal')}</option><option value="1.6">{t('canvas.ink.firm')}</option>
+                </select>
+              )}
+            </>
+          )}
           {tool !== 'highlighter' && (
             <>
               <span className="fmt-sep" />
