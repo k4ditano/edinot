@@ -964,3 +964,12 @@ label.cvp-add { display: inline-block; }
 .canvas-ver-meta { font-size: 11px; opacity: .6; }
 .canvas-ver-viewing { background: color-mix(in srgb, #f59e0b 14%, transparent); border-radius: 8px; padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; }
 .canvas-style-select { font: inherit; font-size: 12px; border: 1px solid var(--line, rgba(0,0,0,.12)); border-radius: 6px; background: transparent; color: inherit; padding: 2px 4px; }
+.canvas-brushes { display: flex; gap: 2px; flex-wrap: nowrap; overflow-x: auto; max-width: 420px; }
+.canvas-brush { border: 1px solid transparent; background: none; border-radius: 8px; padding: 2px; cursor: pointer; line-height: 0; }
+.canvas-brush:hover { background: color-mix(in srgb, currentColor 7%, transparent); }
+.canvas-brush.on { border-color: var(--accent, #2383E2); background: color-mix(in srgb, var(--accent, #2383E2) 10%, transparent); }
+.canvas-brushpick { position: relative; display: inline-flex; }
+.canvas-brushpick > .canvas-brush { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; font-size: 12px; color: inherit; line-height: 1; }
+.canvas-brush-name { white-space: nowrap; }
+.canvas-brushgrid { position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 95; display: grid; grid-template-columns: repeat(3, 92px); gap: 4px; padding: 8px; background: var(--bg, #fff); border: 1px solid var(--line, rgba(0,0,0,.1)); border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.16); }
+.canvas-brushgrid .canvas-brush { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px; font-size: 11px; color: inherit; line-height: 1.2; }

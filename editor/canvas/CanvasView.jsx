@@ -18,6 +18,11 @@ import { applyAutoLayout, applyConstraints, frameTree, frameRect } from './autol
 import { itemCssText } from '../../shared/canvas-css.js';
 import { snapMove, annoBoxes, measureBetween } from './guides.js';
 import { createInk, eventSamples, withPrediction } from './ink.js';
+import { BRUSHES, brushOutlineD, brushFilterSvg, brushFill, brushSpec } from './brushes.js';
+// Muestra de cada pincel en la barra: una ese con la presión subiendo y bajando.
+const BRUSH_SAMPLE = Array.from({ length: 24 }, (_, i) => [3 + i * 1.2, 9 + Math.sin(i / 3.6) * 5, 0.3 + Math.sin(i / 7.6) * 0.6]);
+// La caja de un trazo con pincel ancho (espray, acuarela…) es algo mayor que la de sus puntos.
+const brushBbox = (b, size, brush) => { const k = brush ? Math.max(0, brushSpec(brush).k * size * (brush === 'spray' ? 1.4 : 0.6) - size / 2) : 0; return k ? { x: b.x - k, y: b.y - k, w: b.w + 2 * k, h: b.h + 2 * k } : b; };
 import { markerSvg, outlineStroke } from './outline.js';
 import { pagesOf, filterPage, tagNew, addPage, renamePage, removePage, moveToPage } from './pages.js';
 import { selectionUnits, alignUnits, spaceUnits, tidyUp, mainAxis, currentGap, selectSame, SAME_KINDS, replaceText } from './arrange.js';
@@ -187,7 +192,8 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
   const [tool, setTool] = useState('select');
   const [drawStyle, setDrawStyle] = useState({ color: '#1f2937', size: 4, opacity: 1, fill: false, eraser: 18 });
   // Ajustes de la tinta a mano (en este equipo): suavizado 0…10, curva de presión y predicción.
-  const [inkPrefs, setInkPrefs0] = useState(() => { try { return { stabilize: 3, gamma: 1, predict: true, ...JSON.parse(localStorage.getItem('edinotInk') || '{}') }; } catch { return { stabilize: 3, gamma: 1, predict: true }; } });
+  const [inkPrefs, setInkPrefs0] = useState(() => { try { return { stabilize: 3, gamma: 1, predict: true, brush: 'pen', ...JSON.parse(localStorage.getItem('edinotInk') || '{}') }; } catch { return { stabilize: 3, gamma: 1, predict: true, brush: 'pen' }; } });
+  const [brushMenu, setBrushMenu] = useState(false);
   const setInkPrefs = (fn) => setInkPrefs0(p => { const n = typeof fn === 'function' ? fn(p) : { ...p, ...fn }; try { localStorage.setItem('edinotInk', JSON.stringify(n)); } catch {} return n; });
   const [snapGrid, setSnapGrid] = useState(false);
   const [selAnno, setSelAnno] = useState(() => new Set()); // selected annotation ids
@@ -948,7 +954,16 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
     const pathBody = (b) => <path d={pd} fill={(b.imageFill && b.imageFill.src) ? 'none' : b.gradient ? `url(#cvg-${b.id})` : (b.fill || 'none')} fillRule={b.fillRule || undefined} stroke={b.color || '#ea580c'} strokeWidth={b.strokeWidth || 2.5} strokeLinecap={b.strokeCap || 'round'} strokeLinejoin={b.strokeJoin || 'round'} opacity={b.opacity != null ? b.opacity : 0.85} strokeDasharray={canvasDashArray(b.dash) || undefined}
       markerStart={b.startCap && b.startCap !== 'none' ? `url(#${b.id}-ms)` : undefined} markerEnd={b.endCap && b.endCap !== 'none' ? `url(#${b.id}-me)` : undefined} />;
     if (a.kind === 'path' && pd) {
-      if (a.variant === 'pen') body = <path d={pd} fill={a.fill || a.color || '#1f2937'} stroke="none" opacity={a.opacity != null ? a.opacity : 1} />;
+      if (a.variant === 'pen') {
+        // Pincel: textura / halo con un filtro SVG propio del trazo; el trazo sigue siendo un vector relleno.
+        const ink = a.fill || a.color || '#1f2937';
+        const bf = a.brush && a.brush !== 'pen' ? brushFilterSvg(a.brush, `cvb-${a.id}`, ink) : '';
+        const blend = brushSpec(a.brush).blend;
+        body = <>
+          {bf && <defs dangerouslySetInnerHTML={{ __html: bf }} />}
+          <path d={pd} fill={brushFill(a.brush, ink)} stroke="none" opacity={a.opacity != null ? a.opacity : 1} filter={bf ? `url(#cvb-${a.id})` : undefined} style={blend ? { mixBlendMode: blend } : undefined} />
+        </>;
+      }
       else if (a.variant === 'highlighter') body = <path d={pd} fill="none" stroke={a.color || '#f59e0b'} strokeWidth={a.strokeWidth || 12} strokeLinecap="round" strokeLinejoin="round" opacity={a.opacity != null ? a.opacity : 0.35} style={{ mixBlendMode: 'multiply' }} />;
       else body = pathBody(ps ? ps.base : a);
     } else if (a.kind === 'shape') {
@@ -1298,8 +1313,8 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
     drawingRef.current = { points: ink.points, predicted: [] };
     const renderPreview = () => {
       const pts = withPrediction(drawingRef.current.points, drawingRef.current.predicted);
-      const d = tool === 'pen' ? strokeOutlineD(pts, style.size) : smoothStrokeD(pts);
-      setLivePreview({ kind: 'path', tool, d, color: style.color, size: style.size, opacity: style.opacity });
+      const d = tool === 'pen' ? brushOutlineD(pts, style.size, inkPrefs.brush) : smoothStrokeD(pts);
+      setLivePreview({ kind: 'path', tool, d, color: style.color, size: style.size, opacity: style.opacity * brushSpec(inkPrefs.brush).opacity, brush: tool === 'pen' ? inkPrefs.brush : null });
     };
     renderPreview();
     const onMove = (ev) => {
@@ -1327,7 +1342,7 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
       const bbox = { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
       const raw = packStrokePts(pts);
       const anno = tool === 'pen'
-        ? { id: canvasAnnoId(), kind: 'path', variant: 'pen', d: strokeOutlineD(pts, style.size), pts: raw, size: style.size, fill: style.color, color: style.color, opacity: style.opacity, bbox }
+        ? { id: canvasAnnoId(), kind: 'path', variant: 'pen', d: brushOutlineD(pts, style.size, inkPrefs.brush), pts: raw, size: style.size, fill: style.color, color: style.color, opacity: Math.round(style.opacity * brushSpec(inkPrefs.brush).opacity * 100) / 100, bbox: brushBbox(bbox, style.size, inkPrefs.brush), ...(inkPrefs.brush && inkPrefs.brush !== 'pen' ? { brush: inkPrefs.brush } : {}) }
         : { id: canvasAnnoId(), kind: 'path', variant: 'highlighter', d: smoothStrokeD(pts), pts: raw, size: style.size, color: style.color, strokeWidth: style.size * 4, opacity: 0.35, bbox };
       onChange(j => ({ ...j, annotations: [...(j.annotations || []), anno] }));
     };
@@ -3010,7 +3025,12 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
     const op = a.opacity != null ? a.opacity : 1;
     if (a.kind === 'path' && !a.d && Array.isArray(a.pts) && a.pts.length) a = { ...a, d: strokeD(a) };   // grosor cambiado por un agente
     if (a.kind === 'path' && a.d) {
-      if (a.variant === 'pen') return `<path d="${esc(a.d)}" fill="${esc(a.fill || a.color || '#1f2937')}" stroke="none" opacity="${op}"${tr}/>`;
+      if (a.variant === 'pen') {
+        const ink = a.fill || a.color || '#1f2937';
+        const bf = a.brush && a.brush !== 'pen' ? brushFilterSvg(a.brush, `eb-${a.id}`, ink) : '';
+        const blend = brushSpec(a.brush).blend;
+        return `${bf ? `<defs>${bf}</defs>` : ''}<path d="${esc(a.d)}" fill="${esc(brushFill(a.brush, ink))}" stroke="none" opacity="${op}"${bf ? ` filter="url(#eb-${a.id})"` : ''}${blend ? ` style="mix-blend-mode:${blend}"` : ''}${tr}/>`;
+      }
       if (a.variant === 'highlighter') return `<path d="${esc(a.d)}" fill="none" stroke="${esc(a.color || '#f59e0b')}" stroke-width="${a.strokeWidth || 12}" stroke-linecap="round" opacity="${a.opacity != null ? a.opacity : 0.35}"${tr}/>`;
       return `<path d="${esc(a.d)}" fill="${esc(a.fill || 'none')}"${a.fillRule ? ` fill-rule="${a.fillRule}"` : ''} stroke="${esc(a.color || '#ea580c')}" stroke-width="${a.strokeWidth || 2.5}" stroke-linecap="${a.strokeCap || 'round'}" stroke-linejoin="${a.strokeJoin || 'round'}" opacity="${a.opacity != null ? a.opacity : 0.85}"${dash}${tr}/>`;
     }
@@ -3886,6 +3906,34 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
             <span className="fmt-ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m14 7 3 3M4 20l1.5-4.5L15 6a2.1 2.1 0 0 1 3 3l-9.5 9.5z" /><path d="M16.5 4.5 19.5 7.5" /></svg></span>
           </button>
           {(tool === 'fill' || tool === 'picker') ? null : <span className="fmt-sep" />}
+          {tool === 'pen' && (<>
+            {(() => {
+              const sample = (b, w = 34, h = 18) => (
+                <svg width={w} height={h} viewBox="0 0 34 18" aria-hidden="true">
+                  <defs dangerouslySetInnerHTML={{ __html: brushFilterSvg(b, 'bp-' + b + w, drawStyle.color) }} />
+                  <path d={brushOutlineD(BRUSH_SAMPLE, b === 'spray' ? 1.4 : 2.2, b)} fill={brushFill(b, drawStyle.color)} opacity={brushSpec(b).opacity} filter={brushFilterSvg(b, 'x', '') ? `url(#bp-${b}${w})` : undefined} />
+                </svg>
+              );
+              const cur = inkPrefs.brush || 'pen';
+              return (
+                <span className="canvas-brushpick">
+                  <button type="button" className={`canvas-brush on`} title={t('canvas.brush') + ': ' + t('canvas.brush.' + cur)} aria-haspopup="menu" aria-expanded={brushMenu}
+                    onClick={() => setBrushMenu(v => !v)}>{sample(cur)} ▾</button>
+                  {brushMenu && (
+                    <div className="canvas-brushgrid" role="menu" onMouseLeave={() => setBrushMenu(false)}>
+                      {BRUSHES.map(b => (
+                        <button key={b} type="button" role="menuitemradio" aria-checked={cur === b} className={`canvas-brush${cur === b ? ' on' : ''}`}
+                          onClick={() => { setInkPrefs({ brush: b }); setBrushMenu(false); }}>
+                          {sample(b, 56, 30)}<span>{t('canvas.brush.' + b)}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </span>
+              );
+            })()}
+            <span className="fmt-sep" />
+          </>)}
           {!(tool === 'fill' || tool === 'picker') && (<>
           <span className="canvas-style-label">{t('canvas.stroke')}</span>
           <input type="range" min="1" max="24" step="1" value={drawStyle.size}
@@ -4765,7 +4813,11 @@ function CanvasView({ json: jsonProp, notes, vaults, activeNoteId, syncConfig, o
             )}
             {livePreview && livePreview.kind === 'path' && (
               livePreview.tool === 'pen'
-                ? <path d={livePreview.d} fill={livePreview.color} stroke="none" opacity={livePreview.opacity != null ? livePreview.opacity : 1} />
+                ? (() => {
+                  const bf = livePreview.brush && livePreview.brush !== 'pen' ? brushFilterSvg(livePreview.brush, 'cvb-live', livePreview.color) : '';
+                  const blend = brushSpec(livePreview.brush).blend;
+                  return <>{bf && <defs dangerouslySetInnerHTML={{ __html: bf }} />}<path d={livePreview.d} fill={brushFill(livePreview.brush, livePreview.color)} stroke="none" opacity={livePreview.opacity != null ? livePreview.opacity : 1} filter={bf ? 'url(#cvb-live)' : undefined} style={blend ? { mixBlendMode: blend } : undefined} /></>;
+                })()
                 : <path d={livePreview.d} fill="none" stroke={livePreview.color} strokeWidth={(livePreview.size || 4) * 4} strokeLinecap="round" strokeLinejoin="round" opacity={0.35} style={{ mixBlendMode: 'multiply' }} />
             )}
             {livePreview && livePreview.kind === 'shape' && (() => {

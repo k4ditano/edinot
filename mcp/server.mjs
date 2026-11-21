@@ -11,7 +11,8 @@
 
 import { frameToHtml } from '../shared/frame-html.js';
 import { booleanOp, canBoolean } from '../shared/canvas-boolean.js';
-import { outlineStroke } from '../editor/canvas/outline.js';
+import { outlineStroke, pathPolylines } from '../editor/canvas/outline.js';
+import { brushOutlineD, brushSpec } from '../editor/canvas/brushes.js';
 import { pagesOf, addPage, renamePage, removePage, moveToPage } from '../editor/canvas/pages.js';
 import { selectionUnits, alignUnits, spaceUnits, tidyUp, mainAxis, currentGap, selectSame, replaceText } from '../editor/canvas/arrange.js';
 import { createComponent, insertInstance, syncInstances, listComponents, addVariant, switchVariant, variantsOf, libraryEntryFrom, publishToLibrary, insertFromLibrary, componentProps, setInstanceProp, resetOverrides, instKey } from '../editor/canvas/components.js';
@@ -5269,10 +5270,13 @@ server.tool(
   + 'labelX/labelY paints text near the path. Use AFTER add_canvas_node + '
   + 'connect_canvas_nodes when you want to add a visual cue the user '
   + 'reads as "look, the AI marked this". For multi-step animated '
-  + 'transformations use `canvas_animate` instead.',
+  + 'transformations use `canvas_animate` instead. With `brush` the path becomes a hand-drawn ink stroke painted '
+  + 'with that brush (pencil, marker, fountain pen, calligraphy, brush, charcoal, crayon, watercolor, spray, neon): '
+  + 'tapered ends, pressure that swells in the middle, texture — like the user drawing with the pen tool.',
   {
     name: z.string(),
     d: z.string().min(1),
+    brush: z.enum(['pen', 'pencil', 'marker', 'fountain', 'calligraphy', 'brush', 'charcoal', 'crayon', 'watercolor', 'spray', 'neon']).optional(),
     color: z.string().optional(),
     strokeWidth: z.number().min(0.5).max(20).optional(),
     opacity: z.number().min(0).max(1).optional(),
@@ -5281,10 +5285,31 @@ server.tool(
     labelX: z.number().optional(),
     labelY: z.number().optional(),
   },
-  async ({ name, d, color, strokeWidth, opacity, fill, label, labelX, labelY }) => withSession(async (s) => {
+  async ({ name, d, brush, color, strokeWidth, opacity, fill, label, labelX, labelY }) => withSession(async (s) => {
     const { f, content, block } = await ensureCanvas(s, name);
     const id = newCanvasId('ann');
-    const ann = { id, kind: 'path', d };
+    let ann = { id, kind: 'path', d };
+    if (brush) {
+      // Trazo de tinta con pincel: se muestrea el path en puntos con una presión que crece y baja (como a mano).
+      const line = pathPolylines(d).sort((a, b) => b.pts.length - a.pts.length)[0];
+      if (!line) throw new Error('could not read the path');
+      const raw = [];
+      for (let i = 0; i < line.pts.length; i++) {
+        const a = line.pts[i];
+        if (raw.length && Math.hypot(a[0] - raw[raw.length - 1][0], a[1] - raw[raw.length - 1][1]) < 1.5) continue;
+        raw.push([a[0], a[1]]);
+      }
+      const n = raw.length;
+      const pts = raw.map((p, i) => [Math.round(p[0] * 10) / 10, Math.round(p[1] * 10) / 10, Math.round((0.35 + 0.5 * Math.sin(Math.PI * (n > 1 ? i / (n - 1) : 0.5))) * 100) / 100]);
+      const size = strokeWidth || 4;
+      const ink = color || '#1f2937';
+      const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]), pad = size * brushSpec(brush).k;
+      ann = { id, kind: 'path', variant: 'pen', pts, size, fill: ink, color: ink, d: brushOutlineD(pts, size, brush),
+        opacity: Math.round((opacity != null ? opacity : 1) * brushSpec(brush).opacity * 100) / 100,
+        bbox: { x: Math.min(...xs) - pad, y: Math.min(...ys) - pad, w: Math.max(...xs) - Math.min(...xs) + 2 * pad, h: Math.max(...ys) - Math.min(...ys) + 2 * pad },
+        ...(brush !== 'pen' ? { brush } : {}) };
+      color = undefined; strokeWidth = undefined; opacity = undefined; fill = undefined;
+    }
     if (color) ann.color = color;
     if (strokeWidth != null) ann.strokeWidth = strokeWidth;
     if (opacity != null) ann.opacity = opacity;
