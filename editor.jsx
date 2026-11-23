@@ -89,6 +89,7 @@ import { buildCommands } from './ui/palette/commands.js';
 import { HomePage } from './ui/home/HomePage.jsx';
 import { AllNotesPage } from './ui/allnotes/AllNotesPage.jsx';
 import { dailyNoteName, findDailyNote, findDailyTemplate, defaultDailyBody } from './ui/shared/daily.js';
+import { agendaInRange } from './ui/palette/agenda.js';
 import { THEMES, SYSTEM_THEME, resolveThemeKey, usePrefersDark, usePrefersReducedMotion, themeBootPayload } from './ui/shared/themes.js';
 import { effectiveBindings, matchShortcut, menuAccelerators, setActiveBindings, isBareTypingCombo, kbdHint } from './ui/shared/shortcuts.js';
 import { lazyModule, withLazy, prefetchWhenIdle, PageSkeleton, BlockSkeleton } from './ui/shared/lazy.jsx';
@@ -13229,6 +13230,20 @@ function EdinotApp() {
     setCalendarOpen(false); setCalendarDraft(null); setView('note');
     jumpToMatch(noteId, 0, snippet);
   }, [jumpToMatch]);
+  // Buscador «@fecha»: agenda del rango y abrir un evento (su nota, o el
+  // calendario en ese día si no tiene nota).
+  const paletteAgenda = useCallback((from, to) => {
+    const ids = settings.searchAllVaults !== false ? [...new Set([activeVault, ...vaults.map(v => v.id)])] : [activeVault];
+    return agendaInRange(ids, from, to);
+  }, [settings.searchAllVaults, activeVault, vaults]);
+  const paletteOpenEvent = useCallback((ev) => {
+    if (ev.noteId) { calendarJump(ev.noteId, ev.snippet || undefined); return; }
+    const d = ev.start;
+    const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    setSettingsOpen(false); setAllOpen(false);
+    setCalendarDraft({ focusOnly: true, date });
+    setCalendarOpen(true);
+  }, [calendarJump]);
   const calendarOpenDaily = useCallback((d) => {
     const r = getOrCreateDailyNote(d);
     if (!r) return;
@@ -14328,6 +14343,10 @@ function EdinotApp() {
         tables={tableEntries}
         tagIndex={tagIndex}
         onOpenTable={(d) => jumpToMatch(d.noteId, d.pos || 0)}
+        getAgenda={paletteAgenda}
+        onOpenDaily={calendarOpenDaily}
+        onOpenEvent={paletteOpenEvent}
+        editStamps={lastEditRef.current || undefined}
         onClose={() => setPalette(null)}
         files={files}
         folders={folders}

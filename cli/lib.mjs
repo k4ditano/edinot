@@ -406,6 +406,11 @@ function openLocal(cfg) {
       const newRel = npath.relative(npath.join(root, v), newAbs).split(npath.sep).join('/');
       return { id: `${v}/${newRel}`, name: sanitizeSeg(newName), vaultId: v, path: newRel };
     },
+    // Modo carpeta local: las notas son ficheros .md sueltos y no hay fichas
+    // donde guardar iconos ni fijados.
+    setFileMeta() { throw new Error('icons and pins need a synced Edinot workspace (local folder mode has no note metadata)'); },
+    setFolderMeta() { throw new Error('icons need a synced Edinot workspace (local folder mode has no folder metadata)'); },
+    setVaultMeta() { throw new Error('icons need a synced Edinot workspace (local folder mode has no vault metadata)'); },
     deleteFolder(ref, vaultRef) {
       const v = sanitizeSeg(vaultRef || 'default');
       const want = String(ref || '').replace(/^\/+|\/+$/g, '');
@@ -1738,7 +1743,7 @@ export const ops = {
         const out = [];
         const seen = new Set();
         for (const [id, v] of yVaults.entries()) {
-          out.push({ id, name: (v && v.name) || id, noteCount: counts.get(id) || 0 });
+          out.push({ id, name: (v && v.name) || id, noteCount: counts.get(id) || 0, ...(v && v.icon ? { icon: v.icon } : null), ...(v && v.color ? { color: v.color } : null) });
           seen.add(id);
         }
         // Synthesize 'default' so callers always see it.
@@ -1866,6 +1871,7 @@ export const ops = {
             vault: f.vaultId ? this.vaultName(f.vaultId) : null,
             parentId: f.parentId || null,
             path: folderPath(f.id),
+            ...(f.icon ? { icon: f.icon } : null),
           });
         }
         return out;
@@ -1907,6 +1913,40 @@ export const ops = {
         const f = loc.folder;
         loc.vault.ydoc.transact(() => { loc.vault.yFolders.set(f.id, { ...f, name: newName }); });
         return { ...f, name: newName, path: folderPath(f.id) };
+      },
+      // ── Iconos y fijado (mismos campos que usa la app: `icon` en la ficha
+      // de la nota, la carpeta o el vault; `pinned` en la nota) ─────────────
+      setFileMeta(id, patch) {
+        const loc = locateFile(id);
+        if (!loc) throw new Error(`file not found: ${id}`);
+        const next = { ...loc.meta, ...patch };
+        for (const k of Object.keys(patch)) if (patch[k] == null) delete next[k];
+        loc.vault.ydoc.transact(() => { loc.vault.yFiles.set(id, next); });
+        return next;
+      },
+      setFolderMeta(ref, vaultRef, patch) {
+        const vaultId = vaultRef ? resolveVaultId(vaultRef) : null;
+        const direct = vaultId ? resolveFolder(ref, vaultId) : null;
+        const loc = locateFolder(direct ? direct.id : ref);
+        if (!loc) throw new Error(`folder not found: ${ref}` + (vaultRef ? '' : ' (pass `vault` to resolve a folder by name or path)'));
+        const next = { ...loc.folder, ...patch };
+        for (const k of Object.keys(patch)) if (patch[k] == null) delete next[k];
+        loc.vault.ydoc.transact(() => { loc.vault.yFolders.set(next.id, next); });
+        return { ...next, path: folderPath(next.id) };
+      },
+      setVaultMeta(ref, patch) {
+        const raw = String(ref || '').trim();
+        let id = null, name = null;
+        const byName = findVaultByName(raw);
+        if (byName) { id = byName.id; name = byName.name; }
+        else if (yVaults.has(raw)) { id = raw; name = (yVaults.get(raw) || {}).name || raw; }
+        else if (raw.toLowerCase() === 'default') { id = 'default'; name = 'Default'; }
+        if (!id) throw new Error(`vault not found: ${ref}`);
+        const prev = yVaults.get(id);
+        const next = { ...(prev && typeof prev === 'object' ? prev : {}), id, name, ...patch };
+        for (const k of Object.keys(patch)) if (patch[k] == null) delete next[k];
+        ydoc.transact(() => { yVaults.set(id, next); });
+        return next;
       },
       // Cascade-delete: removes the folder, every descendant folder, and
       // every note that lived in any of those folders. Mirrors the editor's

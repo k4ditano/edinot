@@ -217,6 +217,10 @@ function friendlyToolPayload(name, args) {
     case 'list_workspaces':      return { target: 'workspaces', where: '' };
     case 'switch_workspace':     return { target: 'workspace id=' + str(a.workspaceId), where: '' };
     case 'list_folders':         return { target: 'carpetas' + de(a.vault), where: '' };
+    case 'get_workspace_tree':   return { target: 'estructura' + de(a.vault), where: '' };
+    case 'set_icon':             return { target: str(a.icon) + ' ' + str(a.note || a.folder || a.vault), where: '' };
+    case 'pin_note':             return { target: str(a.note), where: '' };
+    case 'organize':             return { target: (Array.isArray(a.operations) ? a.operations.length : 0) + ' pasos', where: '' };
     case 'list_templates':       return { target: 'plantillas' + de(a.vault), where: '' };
     case 'list_tables':          return { target: 'tablas' + de(a.name), where: '' };
     case 'read_table':           return { target: str(a.name) + (a.idx != null ? ' #' + a.idx : ''), where: '' };
@@ -709,15 +713,22 @@ server.tool(
   'list_notes',
   'List notes in the active workspace. Optionally filter by vault (name or id). '
   + 'Each note exposes both `vaultId` (stable) and `vault` (current name) so '
-  + 'callers can keep references intact across vault renames.',
+  + 'callers can keep references intact across vault renames, plus its '
+  + '`folder` path ("Parent/Child", omitted at the vault root), `icon` and '
+  + '`pinned` when set. For the whole folder structure at a glance use '
+  + 'get_workspace_tree.',
   { vault: z.string().optional() },
   async ({ vault }) => withSession(async (s) => {
     const files = s.listFiles({ vault });
+    const paths = folderPathMap(s);
     return json(files.map((f) => ({
       id: f.id,
       name: f.name,
       vaultId: f.vaultId || 'default',
       vault: s.vaultName(f.vaultId),
+      ...(f.folderId ? { folderId: f.folderId, folder: paths.get(f.folderId) || f.folderId } : null),
+      ...(f.icon ? { icon: f.icon } : null),
+      ...(f.pinned ? { pinned: true } : null),
     })));
   }),
 );
@@ -906,6 +917,7 @@ server.tool(
   + 'X", or did not specify a vault, call `get_active_context` FIRST and reuse '
   + '`activeNote.vault` + `activeNote.folderPath`. Omitting `folder` always '
   + 'creates the note at the vault root, which is rarely what the user wants. '
+  + '`icon` (optional) is one emoji shown next to the note. '
   + 'AFTER calling this, chain `focus_note` + `highlight_in_note` / '
   + '`present_in_note` so the user immediately sees what was created.',
   {
@@ -913,10 +925,13 @@ server.tool(
     content: z.string().optional(),
     vault: z.string().optional(),
     folder: z.string().optional(),
+    icon: z.string().optional(),
   },
-  async ({ name, content, vault, folder }) => withSession(async (s) => {
+  async ({ name, content, vault, folder, icon }) => withSession(async (s) => {
     if (s.findFileByName(name)) throw new Error(`already exists: ${name}`);
+    const iconValue = icon !== undefined ? normIcon(icon) : null;
     const f = await s.createFile(name, vault || 'default', folder || null);
+    if (iconValue) s.setFileMeta(f.id, { icon: iconValue });
     if (content) await s.writeContent(f.id, content);
     s.publishMcpAction({
       kind: 'create',
@@ -2143,10 +2158,12 @@ server.tool(
   'Create a folder inside a vault. `name` is a single segment (no slashes — '
   + 'use `parent` to nest). `vault` accepts a name or id. `parent` (optional) '
   + 'places the new folder under an existing folder (name or "Parent/Child" '
-  + 'path). Fails if a sibling folder with the same name already exists.',
-  { name: z.string(), vault: z.string().optional(), parent: z.string().optional() },
-  async ({ name, vault, parent }) => withSession(async (s) => {
+  + 'path). Fails if a sibling folder with the same name already exists. '
+  + '`icon` (optional) is one emoji for the folder (default 📁).',
+  { name: z.string(), vault: z.string().optional(), parent: z.string().optional(), icon: z.string().optional() },
+  async ({ name, vault, parent, icon }) => withSession(async (s) => {
     const f = await s.createFolder(name, vault || 'default', parent || null);
+    if (icon !== undefined) Object.assign(f, s.setFolderMeta(f.id, null, { icon: normIcon(icon) }));
     s.publishMcpAction({
       kind: 'folder_create',
       folderId: f.id, folder: f.name, path: f.path,
@@ -2208,6 +2225,247 @@ server.tool(
       parent,
     });
     return json({ ok: true, ...out, vault: s.vaultName(out.vaultId) });
+  }),
+);
+
+// ── Icons, pins and bulk organizing ───────────────────────────────────────
+// The app keeps an emoji `icon` on every note, folder and vault card (shown in
+// the sidebar, search and tabs) and a `pinned` flag on notes (Pinned section).
+
+// Folder id → "Parent/Child" for every folder the session can see.
+function folderPathMap(s) {
+  const m = new Map();
+  try { for (const f of s.listFolders()) m.set(f.id, f.path || f.name); } catch {}
+  return m;
+}
+
+// An icon is one emoji (flags, skin tones and ZWJ sequences included).
+// "" / null clears it. Words like "folder" are refused: the app would print
+// the word itself where the icon goes.
+function normIcon(icon) {
+  if (icon == null) return null;
+  const v = String(icon).trim();
+  if (!v) return null;
+  if (v.length > 32 || /\s/.test(v) || !/[\p{Extended_Pictographic}\p{Regional_Indicator}]/u.test(v)) {
+    throw new Error(`icon must be a single emoji (e.g. "📁", "🧾", "🇪🇸"), got: ${JSON.stringify(icon)}`);
+  }
+  return v;
+}
+
+function applySetIcon(s, { note, folder, vault, icon }) {
+  const value = normIcon(icon);
+  if (note) {
+    const f = s.findFileByName(note);
+    if (!f) throw new Error(`note not found: ${note}`);
+    const m = s.setFileMeta(f.id, { icon: value });
+    return { target: 'note', id: m.id, name: m.name, icon: value };
+  }
+  if (folder) {
+    const fo = s.setFolderMeta(folder, vault || null, { icon: value });
+    return { target: 'folder', id: fo.id, name: fo.name, path: fo.path, icon: value };
+  }
+  if (vault) {
+    const v = s.setVaultMeta(vault, { icon: value });
+    return { target: 'vault', id: v.id, name: v.name, icon: value };
+  }
+  throw new Error('set_icon needs `note`, `folder` (+ `vault`) or `vault`');
+}
+
+server.tool(
+  'set_icon',
+  'Set or clear the emoji icon of a note, a folder or a vault — the icon the '
+  + 'user sees in the sidebar, search, tabs and Home. Pass exactly one target: '
+  + '`note` (name or id), `folder` (name, "Parent/Child" path or id; add `vault` '
+  + 'to resolve a name/path) or only `vault` (name or id) for the vault itself. '
+  + '`icon` is ONE emoji ("🧾", "📈", "🇪🇸"); "" removes it. Pick icons that '
+  + 'say what is inside (💼 clients, 🧾 invoices, 📚 reading) and keep siblings '
+  + 'visually distinct. To change many at once use `organize`.',
+  {
+    icon: z.string(),
+    note: z.string().optional(),
+    folder: z.string().optional(),
+    vault: z.string().optional(),
+  },
+  async (args) => withSession(async (s) => json({ ok: true, ...applySetIcon(s, args) })),
+);
+
+server.tool(
+  'pin_note',
+  'Pin a note to the sidebar\'s Pinned section (or unpin it with '
+  + '`pinned: false`). `note` is a name or id.',
+  { note: z.string(), pinned: z.boolean().optional() },
+  async ({ note, pinned }) => withSession(async (s) => {
+    const f = s.findFileByName(note);
+    if (!f) throw new Error(`note not found: ${note}`);
+    const want = pinned !== false;
+    const m = s.setFileMeta(f.id, { pinned: want ? true : null });
+    return json({ ok: true, id: m.id, name: m.name, pinned: want });
+  }),
+);
+
+server.tool(
+  'get_workspace_tree',
+  'The whole structure at a glance, as an indented outline: every vault, its '
+  + 'folders (nested) and the notes inside each one, with icons, pins and ids. '
+  + 'Call this BEFORE reorganizing (it is far cheaper than list_notes + '
+  + 'list_folders) and again afterwards to check the result. `vault` limits '
+  + 'it to one vault; `notes: false` shows folders only; `maxNotes` caps the '
+  + 'notes listed per folder (default 40, the rest are counted).',
+  {
+    vault: z.string().optional(),
+    notes: z.boolean().optional(),
+    maxNotes: z.number().int().min(0).max(500).optional(),
+  },
+  async ({ vault, notes, maxNotes }) => withSession(async (s) => {
+    const showNotes = notes !== false;
+    const cap = maxNotes == null ? 40 : maxNotes;
+    let vaults = s.listVaults();
+    if (vault) {
+      const want = String(vault).toLowerCase();
+      vaults = vaults.filter(v => v.id === vault || String(v.name).toLowerCase() === want);
+      if (!vaults.length) throw new Error(`vault not found: ${vault}. Vaults: ${s.listVaults().map(v => v.name).join(', ')}`);
+    }
+    const folders = s.listFolders();
+    const files = s.listFiles({});
+    const lines = [];
+    const base = (n) => String(n || '').replace(/\.(md|markdown|txt)$/i, '');
+    const noteLine = (f, pad) => `${pad}${f.icon || '📄'} ${base(f.name)}${f.pinned ? ' 📌' : ''}  [${f.id}]`;
+    const listNotes = (arr, pad) => {
+      if (!showNotes) { if (arr.length) lines.push(`${pad}(${arr.length} notes)`); return; }
+      const sorted = arr.slice().sort((a, b) => base(a.name).localeCompare(base(b.name)));
+      for (const f of sorted.slice(0, cap)) lines.push(noteLine(f, pad));
+      if (sorted.length > cap) lines.push(`${pad}… ${sorted.length - cap} more notes`);
+    };
+    let totalFolders = 0, totalNotes = 0;
+    for (const v of vaults) {
+      const vf = folders.filter(f => (f.vaultId || 'default') === v.id);
+      const vn = files.filter(f => (f.vaultId || 'default') === v.id);
+      totalFolders += vf.length; totalNotes += vn.length;
+      lines.push(`${v.icon || '🗄️'} ${v.name}  [vault ${v.id}] — ${vn.length} notes, ${vf.length} folders`);
+      const known = new Set(vf.map(f => f.id));
+      const walk = (parentId, depth) => {
+        const pad = '  '.repeat(depth);
+        const kids = vf.filter(f => (f.parentId || null) === parentId)
+          .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+        for (const fo of kids) {
+          const inside = vn.filter(f => f.folderId === fo.id);
+          lines.push(`${pad}${fo.icon || '📁'} ${fo.name}/  [folder ${fo.id}] (${inside.length})`);
+          walk(fo.id, depth + 1);
+          listNotes(inside, '  '.repeat(depth + 1));
+        }
+      };
+      walk(null, 1);
+      // Folders whose parent is gone, and notes at the root or in a missing folder.
+      for (const fo of vf.filter(f => f.parentId && !known.has(f.parentId))) {
+        lines.push(`  ${fo.icon || '📁'} ${fo.name}/  [folder ${fo.id}] (orphan: parent missing)`);
+      }
+      listNotes(vn.filter(f => !f.folderId || !known.has(f.folderId)), '  ');
+    }
+    lines.push('', `${vaults.length} vaults · ${totalFolders} folders · ${totalNotes} notes`);
+    return text(lines.join('\n'));
+  }),
+);
+
+const ORGANIZE_OPS = ['create_folder', 'move_note', 'move_folder', 'rename_note', 'rename_folder', 'set_icon', 'pin_note', 'unpin_note'];
+
+server.tool(
+  'organize',
+  'Apply many organizing steps in ONE call, in order: create folders, move '
+  + 'notes and folders, rename, set icons, pin/unpin. Use it to tidy a vault '
+  + 'after planning with get_workspace_tree. Each step is an object with `op` '
+  + 'and its fields:\n'
+  + '  create_folder { name, vault?, parent?, icon? }\n'
+  + '  move_note     { note, folder? ("" = vault root), vault? }\n'
+  + '  move_folder   { folder, parent ("" = vault root), vault? }\n'
+  + '  rename_note   { note, newName }\n'
+  + '  rename_folder { folder, newName, vault? }\n'
+  + '  set_icon      { note | folder (+vault) | vault, icon ("" clears) }\n'
+  + '  pin_note / unpin_note { note }\n'
+  + 'Steps run in order, so a folder created in step 1 can receive notes in '
+  + 'step 2 (refer to it by name or path). A failing step is reported and the '
+  + 'rest still run. Moving/renaming is reversible but deleting is not — this '
+  + 'tool never deletes; ask the user before calling delete_* tools. Large '
+  + 'reorganizations: show the user the plan first.',
+  {
+    operations: z.array(z.object({
+      op: z.enum(ORGANIZE_OPS),
+      note: z.string().optional(),
+      folder: z.string().optional(),
+      vault: z.string().optional(),
+      parent: z.string().optional(),
+      name: z.string().optional(),
+      newName: z.string().optional(),
+      icon: z.string().optional(),
+    })).min(1).max(300),
+  },
+  async ({ operations }) => withSession(async (s) => {
+    const results = [];
+    let ok = 0;
+    for (let i = 0; i < operations.length; i++) {
+      const o = operations[i];
+      try {
+        let r;
+        switch (o.op) {
+          case 'create_folder': {
+            if (!o.name) throw new Error('`name` is required');
+            const f = await s.createFolder(o.name, o.vault || 'default', o.parent || null);
+            if (o.icon !== undefined) s.setFolderMeta(f.id, null, { icon: normIcon(o.icon) });
+            r = { id: f.id, path: f.path, ...(o.icon ? { icon: normIcon(o.icon) } : null) };
+            break;
+          }
+          case 'move_note': {
+            if (!o.note) throw new Error('`note` is required');
+            if (o.vault === undefined && o.folder === undefined) throw new Error('needs `folder` and/or `vault`');
+            const f = s.findFileByName(o.note);
+            if (!f) throw new Error(`note not found: ${o.note}`);
+            const u = await s.moveFile(f.id, o.vault, o.folder);
+            r = { id: u.id, name: u.name, vault: s.vaultName(u.vaultId), folderId: u.folderId || null };
+            break;
+          }
+          case 'move_folder': {
+            if (!o.folder || o.parent === undefined) throw new Error('`folder` and `parent` are required');
+            const u = s.moveFolder(o.folder, o.parent, o.vault || 'default');
+            r = { id: u.id, path: u.path };
+            break;
+          }
+          case 'rename_note': {
+            if (!o.note || !o.newName) throw new Error('`note` and `newName` are required');
+            const f = s.findFileByName(o.note);
+            if (!f) throw new Error(`note not found: ${o.note}`);
+            if (f.name.toLowerCase().replace(/\.md$/, '') !== o.newName.toLowerCase().replace(/\.md$/, '') && s.findFileByName(o.newName)) {
+              throw new Error(`a note named ${o.newName} already exists`);
+            }
+            s.renameFile(f.id, o.newName);
+            r = { id: f.id, from: f.name, to: o.newName };
+            break;
+          }
+          case 'rename_folder': {
+            if (!o.folder || !o.newName) throw new Error('`folder` and `newName` are required');
+            const u = s.renameFolder(o.folder, o.newName, o.vault || 'default');
+            r = { id: u.id, path: u.path };
+            break;
+          }
+          case 'set_icon':
+            r = applySetIcon(s, o);
+            break;
+          case 'pin_note':
+          case 'unpin_note': {
+            if (!o.note) throw new Error('`note` is required');
+            const f = s.findFileByName(o.note);
+            if (!f) throw new Error(`note not found: ${o.note}`);
+            s.setFileMeta(f.id, { pinned: o.op === 'pin_note' ? true : null });
+            r = { id: f.id, pinned: o.op === 'pin_note' };
+            break;
+          }
+          default: throw new Error(`unknown op ${o.op}`);
+        }
+        ok++;
+        results.push({ step: i + 1, op: o.op, ok: true, ...r });
+      } catch (err) {
+        results.push({ step: i + 1, op: o.op, ok: false, error: String((err && err.message) || err) });
+      }
+    }
+    return json({ ok: ok === operations.length, done: ok, failed: operations.length - ok, results });
   }),
 );
 

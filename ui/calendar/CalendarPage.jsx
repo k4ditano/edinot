@@ -364,6 +364,13 @@ export const CalendarPage = memo(function CalendarPage({
   useEffect(() => {
     if (!initialDraft) return;
     const d0 = initialDraft;
+    // Solo ir a un día (buscador «@fecha» → evento sin nota): sin popover.
+    if (d0.focusOnly) {
+      const day = parseWhen(d0.date);
+      if (day) { setCursor(startOfDay(day)); setSelected(startOfDay(day)); setMiniMonth(new Date(day.getFullYear(), day.getMonth(), 1)); }
+      onDraftConsumed && onDraftConsumed();
+      return;
+    }
     const time = d0.time || '';
     let endTime = '';
     if (time && d0.kind !== 'reminder') { const [h, m] = time.split(':').map(Number); endTime = minToHm(Math.min(23 * 60 + 45, h * 60 + m + 60)); }
