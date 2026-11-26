@@ -4,6 +4,7 @@
 //   'i:<url>'      imagen (edinot://blob/<sha>, data: o http)
 // Se pintan como una banda redondeada encima del icono, en Leer y en Editar.
 
+import { svg } from './icons.js';
 import { genCss } from '../../ui/shared/generative.js';
 import { t } from '../../i18n.js';
 
@@ -31,7 +32,7 @@ export function coverHtml(cover, { editable = true } = {}) {
 // Botón «Añadir portada» (junto a «Añadir icono», visible al pasar el ratón).
 export function coverAddHtml(cover, { editable = true } = {}) {
   if (cover || !editable) return '';
-  return `<button type="button" class="blk-cover-add blk-noexport" data-blk-cover="add">${esc(t('blk.cover.add'))}</button>`;
+  return `<button type="button" class="blk-cover-add blk-noexport" data-blk-cover="add">${svg('image', 14)}${esc(t('blk.cover.add'))}</button>`;
 }
 
 // Escala una imagen a ≤ maxW px y la devuelve como data: URL JPEG (modo sin sincronización).

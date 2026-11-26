@@ -194,6 +194,10 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// Nombres que la app pone a una nota nueva: al pulsar el título se
+// seleccionan enteros para escribir encima.
+const DEFAULT_TITLE_RE = /^(nuevo documento|nueva nota|sin t[ií]tulo|untitled|new document|new note)(\s*\(?\d+\)?)?$/i;
+
 function wireHeadEvents(el, view, editable, title) {
   if (!editable) return;
   el.addEventListener('mousedown', (e) => {
@@ -216,9 +220,19 @@ function wireHeadEvents(el, view, editable, title) {
     else if (ttl) {
       // Sin H1: el título viene del nombre del fichero. Al pulsarlo se
       // materializa como «# Título» al principio para editarlo en línea.
+      // El cursor va donde se pulsó (antes iba siempre al final y se perdía
+      // la selección); un nombre por defecto («Nuevo documento», «Sin
+      // título»…) o un doble clic lo seleccionan entero para reescribirlo.
       const name = title || '';
       const insert = '# ' + name + '\n\n';
-      view.dispatch({ changes: { from: 0, insert }, selection: { anchor: 2 + name.length }, userEvent: 'input.title' });
+      let off = name.length;
+      try {
+        const r = document.caretRangeFromPoint && document.caretRangeFromPoint(e.clientX, e.clientY);
+        if (r && ttl.contains(r.startContainer) && r.startContainer.nodeType === 3) off = Math.min(name.length, r.startOffset);
+      } catch { /* sin posición: al final */ }
+      const whole = !name || DEFAULT_TITLE_RE.test(name) || e.detail >= 2;
+      const selection = whole ? { anchor: 2, head: 2 + name.length } : { anchor: 2 + off };
+      view.dispatch({ changes: { from: 0, insert }, selection, userEvent: 'input.title' });
       view.focus();
     }
   });
@@ -1086,6 +1100,38 @@ function widgetEdgeFilter() {
   });
 }
 
+// Triple clic en un título: CodeMirror selecciona la línea entera con su
+// «# » oculto y el salto de línea, y al escribir encima se perdía el formato
+// de título (el texto acababa como párrafo). Se recorta al texto visible.
+function headingLineText(state, pos) {
+  const line = state.doc.lineAt(pos);
+  const m = /^(#{1,6})\s+/.exec(line.text);
+  return m ? { from: line.from + m[0].length, to: line.to, level: m[1].length, line } : null;
+}
+function headingSelectFilter() {
+  return EditorState.transactionFilter.of((tr) => {
+    if (tr.docChanged || !tr.selection || !tr.isUserEvent('select.pointer')) return tr;
+    const sel = tr.selection.main;
+    if (sel.empty || tr.selection.ranges.length > 1) return tr;
+    const h = headingLineText(tr.startState, sel.from);
+    if (!h || sel.from > h.from || sel.to < h.to || sel.to > h.to + 1) return tr;
+    if (h.to <= h.from) return tr;
+    return [tr, { selection: { anchor: h.from, head: h.to }, userEvent: 'select.pointer' }];
+  });
+}
+// Ctrl/Cmd+A dentro del título de la página (H1): primero selecciona solo el
+// título; una segunda pulsación ya selecciona toda la nota.
+function selectTitleFirst(view) {
+  const { state } = view;
+  const sel = state.selection.main;
+  const h = headingLineText(state, sel.head);
+  if (!h || h.level !== 1 || h.to <= h.from) return false;
+  if (sel.from === h.from && sel.to === h.to) return false;
+  if (sel.from < h.line.from || sel.to > h.line.to) return false;
+  view.dispatch({ selection: { anchor: h.from, head: h.to }, userEvent: 'select' });
+  return true;
+}
+
 function blkEnter(view) {
   if (vimNormal(view)) return false;
   if (completionStatus(view.state) === 'active') return false;
@@ -1306,6 +1352,7 @@ function makeKeymap() {
     { key: 'Mod-Shift-x', run: (v) => toggleInlineMark(v, '~~'), preventDefault: true },
     { key: 'Mod-e', run: (v) => toggleInlineMark(v, '`'), preventDefault: true },
     { key: 'Mod-Shift-v', run: () => { plainPasteUntil = Date.now() + 1500; return false; } },
+    { key: 'Mod-a', run: selectTitleFirst },
   ]));
 }
 
@@ -1755,7 +1802,7 @@ export function blockEditorExtensions(cfg) {
     makeBlockRebuildScheduler(field),
     makeInlinePlugin(conf),
     codeFolding({ placeholderDOM: () => { const s = document.createElement('span'); s.className = 'cm-blk-foldph'; return s; } }),
-    ...(conf.readOnly ? [] : [makeKeymap(), renumberLists, orphanMarkFilter(), widgetEdgeFilter(), pasteHandler(conf), makeInteractionPlugin(conf), makeHandlesPlugin(conf)]),
+    ...(conf.readOnly ? [] : [makeKeymap(), renumberLists, orphanMarkFilter(), widgetEdgeFilter(), headingSelectFilter(), pasteHandler(conf), makeInteractionPlugin(conf), makeHandlesPlugin(conf)]),
     EditorView.editorAttributes.of({ class: 'cm-blk-editor' }),
   ];
 }

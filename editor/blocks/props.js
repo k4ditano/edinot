@@ -194,7 +194,7 @@ function tagsHtml(props, editable) {
     + (editable ? `<button type="button" class="blk-tagchip-x blk-noexport" data-blk-tag-rm="${esc(tg)}" aria-label="${esc(t('blk.tags.remove', { tag: tg }))}">×</button>` : '')
     + `</span>`).join('');
   const add = editable
-    ? `<button type="button" class="blk-tag-add blk-noexport" data-blk-tag-add="1">${svg('plus', 12, 2)}${esc(t('blk.tags.add'))}</button>`
+    ? `<button type="button" class="blk-tag-add blk-noexport" data-blk-tag-add="1">${svg('plus', 14, 2)}${esc(t('blk.tags.add'))}</button>`
     : '';
   return `<div class="blk-tags${tags.length ? '' : ' empty'}" data-blk-tags="1">${chips}${add}</div>`;
 }
@@ -213,7 +213,7 @@ export function propsHtml(props, { editable = true } = {}) {
       + `<dd>${valueHtml(ty, v)}</dd></div>`;
   }
   const add = editable
-    ? `<button type="button" class="blk-prop-add blk-noexport" data-blk-prop-add="1">${svg('plus', 13, 2)}${esc(t('blk.props.add'))}</button>`
+    ? `<button type="button" class="blk-prop-add blk-noexport" data-blk-prop-add="1">${svg('plus', 14, 2)}${esc(t('blk.props.add'))}</button>`
     : '';
   return `<div class="blk-props${entries.length ? '' : ' empty'}" data-blk-props="1">`
     + tagsHtml(props, editable)

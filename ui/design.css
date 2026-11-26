@@ -354,7 +354,12 @@ html, body { background: var(--app-bg); }
 .blk-cover-tools button { height: 26px; padding: 0 10px; border: 0; border-radius: var(--radius); background: rgba(255,255,255,.88); color: #141414; font: 500 12px var(--font-ui); cursor: pointer; backdrop-filter: blur(6px); }
 .blk-cover-tools button:hover { background: #fff; }
 .blk-head-row { display: flex; align-items: flex-end; gap: 8px; }
-.blk-cover-add { border: 0; background: transparent; color: var(--faint); font: 400 13px var(--font-ui); padding: 3px 8px; border-radius: var(--radius-sm); cursor: pointer; opacity: 0; transition: opacity .15s ease; }
+.blk-cover-add { border: 0; background: transparent; color: var(--faint); font: 400 13px var(--font-ui); padding: 3px 8px; border-radius: var(--radius-sm); cursor: pointer; opacity: .55; transition: opacity .15s ease; display: inline-flex; align-items: center; gap: 6px; height: 26px; }
+.blk-cover-add svg { display: block; }
+/* Misma caja que «Añadir icono» (26 px, 4 px por debajo) en Leer y Editar:
+   ambos van alineados abajo en la fila y, si no, la portada quedaba más baja. */
+.blk-page-head .blk-cover-add, .blk-head-row .blk-cover-add { margin: 0 0 4px; padding: 0 8px; line-height: 26px; }
+.blk-page-icon-add { font-family: var(--font-ui); }
 .blk-page-head:hover .blk-cover-add, .cm-blk-head:hover .blk-cover-add, .md-render:hover > .blk-page-head .blk-cover-add { opacity: 1; }
 .blk-cover-add:hover { background: var(--hover); color: var(--muted); }
 .blk-page-head { display: flex; align-items: flex-end; gap: 8px; }
@@ -365,9 +370,19 @@ html, body { background: var(--app-bg); }
 .blk-cover-sw.on { box-shadow: 0 0 0 2px var(--accent); }
 .blk-cover-actions { display: flex; justify-content: space-between; border-top: 1px solid var(--line); padding-top: 8px; }
 
-/* Propiedades vacías: una sola fila discreta (+ Etiqueta · + Añadir propiedad)
-   que aparece al pasar el ratón; antes ocupaban dos filas (≈60 px) siempre. */
-.blk-props.empty { display: flex !important; align-items: center; gap: 2px; height: 26px; margin: -6px 0 4px !important; opacity: 0; transition: opacity .15s ease; }
+/* Propiedades vacías: una sola fila discreta (+ Etiqueta · + Añadir propiedad),
+   siempre visible pero tenue (antes solo al pasar el ratón y nadie sabía que
+   existían); a opacidad completa al pasar el ratón por ella o por el título. */
+.blk-props.empty { display: flex !important; align-items: center; gap: 2px; height: 26px; margin: -6px 0 4px !important; opacity: .55; transition: opacity .15s ease; }
+.blk-props.empty .blk-prop-add { opacity: 1 !important; }
+/* «+ Etiqueta» y «+ Añadir propiedad» con la misma caja que «Añadir icono» y
+   «Añadir portada»: 26 px de alto, 13 px, icono de 14 px, mismo tono. Antes
+   eran 24 y 28 px con letra e icono distintos y no quedaban a la misma altura. */
+.blk-props.empty .blk-tags { margin: 0; opacity: 1; }
+.blk-props.empty .blk-tag-add, .blk-props.empty .blk-prop-add {
+  height: 26px; line-height: 26px; padding: 0 8px !important; gap: 6px; font-size: 13px; font-family: var(--font-ui); opacity: 1 !important;
+}
+.blk-props.empty .blk-tag-add svg, .blk-props.empty .blk-prop-add svg { display: block; }
 .blk-props.empty .blk-tags.empty { opacity: 1 !important; display: inline-flex; }
 .blk-props.empty:hover, .blk-props.empty:focus-within, .md-h1:hover + .blk-props.empty, .blk-page-title:hover + .blk-props.empty { opacity: 1; }
 .blk-props.empty .blk-prop-add { margin: 0 !important; }
@@ -378,10 +393,12 @@ html, body { background: var(--app-bg); }
 .fo-lines i { display: block; height: 2px; border-radius: 2px; background: color-mix(in srgb, var(--fg) 22%, transparent); transition: background .15s, width .15s; }
 .fo-lines i.on { background: var(--fg); }
 .fo-card {
-  width: 240px; max-height: 60vh; overflow: auto; padding: 6px; border-radius: var(--radius-lg);
+  position: relative; width: 260px; max-height: min(70vh, calc(100vh - 170px)); overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding: 6px; border-radius: var(--radius-lg);
   background: var(--bg); box-shadow: var(--shadow-pop); display: flex; flex-direction: column; gap: 1px;
 }
-.fo-item { text-align: left; border: 0; background: transparent; color: var(--muted); font: 400 13px/1.35 var(--font-ui); padding: 5px 8px; border-radius: var(--radius-sm); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* flex-shrink 0: con muchos títulos la columna encogía los botones en vez
+   de hacer scroll y las filas se montaban unas sobre otras. */
+.fo-item { flex: 0 0 auto; min-height: 28px; text-align: left; border: 0; background: transparent; color: var(--muted); font: 400 13px/1.35 var(--font-ui); padding: 5px 8px; border-radius: var(--radius-sm); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fo-item:hover { background: var(--hover); color: var(--fg); }
 .fo-item.on { color: var(--fg); font-weight: 500; }
 .fo-item.lvl-1 { padding-left: 20px; }

@@ -3,7 +3,7 @@
 // más alto el nivel); la de la sección que se lee va resaltada. Al pasar el
 // ratón se despliega la lista de títulos y un clic salta a la sección.
 
-import { useState, useEffect, useMemo, memo } from 'react';
+import { useState, useEffect, useMemo, useRef, memo } from 'react';
 import { extractOutline } from './ContextPanel.jsx';
 
 export const FloatingOutline = memo(function FloatingOutline({ content, onJump, getActiveHeading }) {
@@ -27,6 +27,16 @@ export const FloatingOutline = memo(function FloatingOutline({ content, onJump, 
     const tm = setTimeout(calc, 150);
     return () => { window.removeEventListener('scroll', onScroll, true); if (raf) cancelAnimationFrame(raf); clearTimeout(tm); };
   }, [outline, getActiveHeading]);
+  // Con muchos títulos la tarjeta hace scroll: al abrirla, que se vea la
+  // sección que se está leyendo.
+  const cardRef = useRef(null);
+  useEffect(() => {
+    if (!open || !cardRef.current) return;
+    const card = cardRef.current;
+    const on = card.querySelector('.fo-item.on');
+    // A mano (no scrollIntoView): moverse solo dentro de la tarjeta, nunca la nota.
+    if (on) card.scrollTop = Math.max(0, on.offsetTop - card.clientHeight / 2 + on.offsetHeight / 2);
+  }, [open]);
   if (outline.length < 2) return null;
   const min = Math.min(...outline.map(o => o.level));
   return (
@@ -38,7 +48,7 @@ export const FloatingOutline = memo(function FloatingOutline({ content, onJump, 
         ))}
       </div>
       {open && (
-        <div className="fo-card">
+        <div className="fo-card" ref={cardRef}>
           {outline.map(o => (
             <button key={o.n} type="button" className={`fo-item lvl-${o.level - min}${o.n === active ? ' on' : ''}`}
               onClick={() => onJump(o)} title={o.text}>{o.text}</button>

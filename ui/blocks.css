@@ -128,7 +128,7 @@
 .blk-page-icon.none { height: 26px; margin: 0 0 4px; display: flex; align-items: center; }
 .blk-page-icon-add {
   display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px; border-radius: 7px;
-  font-size: 13px; color: var(--faint); cursor: pointer; opacity: 0; transition: opacity .12s;
+  font-size: 13px; color: var(--faint); cursor: pointer; opacity: .55; transition: opacity .12s;
 }
 .blk-page-head:hover .blk-page-icon-add, .cm-blk-head:hover .blk-page-icon-add, .blk-page-icon:focus-visible .blk-page-icon-add { opacity: 1; }
 .blk-page-icon-add:hover { background: var(--hover); color: var(--muted); }
@@ -170,7 +170,9 @@
 }
 .blk-prop-add:hover { background: var(--hover); color: var(--muted); }
 .blk-props.empty { margin: 0 0 6px; }
-.blk-props.empty .blk-prop-add { opacity: 0; transition: opacity .12s; }
+/* Siempre a la vista (tenue): si solo salían al pasar el ratón nadie sabía
+   que la nota admite icono, portada y propiedades. */
+.blk-props.empty .blk-prop-add { opacity: .55; transition: opacity .12s; }
 .blk-props.empty:hover .blk-prop-add, .blk-page-head:hover ~ .blk-props.empty .blk-prop-add,
 .cm-blk-head:hover .blk-props.empty .blk-prop-add, .blk-props.empty .blk-prop-add:focus-visible { opacity: 1; }
 .blk-props-rule { height: 1px; background: var(--line); margin: 10px 0 0; }

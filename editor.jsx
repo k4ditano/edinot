@@ -7139,11 +7139,25 @@ function NotificationsBell({ syncConfig, onOpenWorkspace }) {
 const EMPTY_CRUMBS = [];
 
 
+// ¿Mismos metadatos de nota? (setFiles se salta las que no cambian.)
+function sameFileMeta(a, b) {
+  if (!a || !b) return false;
+  const ka = Object.keys(a), kb = Object.keys(b);
+  if (ka.length !== kb.length) return false;
+  for (const k of ka) {
+    const x = a[k], y = b[k];
+    if (x === y) continue;
+    if (x && y && typeof x === 'object' && typeof y === 'object' && JSON.stringify(x) === JSON.stringify(y)) continue;
+    return false;
+  }
+  return true;
+}
+
 // ── Reminder banner (F2) ──────────────────────────────────────────────
 // Bottom-right toast shown when the Electron scheduler fires a reminder.
 // User can snooze (10m / 1h / tomorrow) or dismiss; we persist into
 // yEvents from the parent so other devices honor the choice.
-function ReminderBanner({ state, onSnooze, onDismiss, onClose }) {
+function ReminderBanner({ state, onSnooze, onDismiss, onDone, onClose }) {
   useI18n();
   if (!state || !state.item) return null;
   const { item } = state;
@@ -7160,10 +7174,62 @@ function ReminderBanner({ state, onSnooze, onDismiss, onClose }) {
         <button className="cal-btn" onClick={() => onSnooze(10)}>{t('rem.snooze10')}</button>
         <button className="cal-btn" onClick={() => onSnooze(60)}>{t('rem.snooze1h')}</button>
         <button className="cal-btn" onClick={() => onSnooze(60 * 24)}>{t('rem.snoozeDay')}</button>
-        <button className="cal-btn cal-del" onClick={onDismiss}>{t('rem.dismiss')}</button>
+        <button className="cal-btn reminder-banner-done" onClick={onDone}
+          title={item.task ? t('rem.doneTaskTip') : t('rem.doneTip')}>
+          <VIcon name="check" /> {t('rem.done')}
+        </button>
+        {item.task && <button className="cal-btn cal-del" onClick={onDismiss} title={t('rem.dismissTip')}>{t('rem.dismiss')}</button>}
       </div>
     </div>
   );
+}
+
+// «Hecho» en el aviso de una tarea `- [ ] … ⏰`: marca su casilla en la nota.
+// La nota puede no estar abierta: su texto vive en su propio documento
+// (getNoteDoc), que hay que cargar (IndexedDB y, con sincronización, el
+// servidor) antes de editarlo; escribir en la copia del documento de la
+// bóveda no se guardaba y el aviso volvía a saltar.
+// Busca la línea por el fragmento guardado (y, si no, por la línea indicada).
+async function tickReminderTask(item, syncCfg) {
+  try {
+    const located = locateFileAcrossVaults(item.noteId);
+    const loaded = listNoteRegistryEntries().some(e => e.noteId === item.noteId);
+    const canSync = !!(syncCfg && syncCfg.token && syncCfg.wsUrl && located);
+    let yt;
+    if (loaded || canSync) {
+      const entry = getNoteDoc(item.noteId);
+      if (!entry || !entry.ytext) return false;
+      await whenNoteLocalReady(item.noteId);
+      if (canSync) {
+        connectNoteProvider(item.noteId, located.vaultId || item.vaultId || 'default', syncCfg);
+        for (let i = 0; i < 50 && !entry.synced && entry.status !== 'auth-failed'; i++) await new Promise(r => setTimeout(r, 100));
+        if (!entry.synced) return false;
+      }
+      yt = entry.ytext;
+    } else {
+      yt = getContent(item.noteId); // sin documento propio: el de la bóveda
+    }
+    if (!yt) return false;
+    const text = yt.toString();
+    if (!text) return false;
+    const lines = text.split('\n');
+    const snip = item.anchor && item.anchor.snippet ? String(item.anchor.snippet).trim() : '';
+    const isOpen = (l) => /^\s*[-*]\s+\[ \]\s+/.test(l);
+    let idx = snip ? lines.findIndex(l => isOpen(l) && l.trim() === snip) : -1;
+    if (idx < 0 && snip) idx = lines.findIndex(l => isOpen(l) && l.trim().startsWith(snip.slice(0, 60)));
+    const hint = item.anchor && Number.isInteger(item.anchor.line) ? item.anchor.line : -1;
+    if (idx < 0 && hint >= 0 && isOpen(lines[hint] || '')) idx = hint;
+    if (idx < 0) return false;
+    let off = 0;
+    for (let i = 0; i < idx; i++) off += lines[i].length + 1;
+    const at = off + lines[idx].indexOf('[ ]') + 1;
+    yt.doc.transact(() => { yt.delete(at, 1); yt.insert(at, 'x'); });
+    mirrorContentToVault(item.noteId, yt.toString());
+    return true;
+  } catch (e) {
+    console.warn('[reminder] tick', e && e.message);
+    return false;
+  }
 }
 
 // Búsquedas que Ctrl K reutiliza tal cual (ui/palette/CommandPalette.jsx).
@@ -7624,9 +7690,13 @@ function EdinotApp() {
     });
   }, []);
 
+  // Solo escribe las notas que cambian: reescribir los metadatos de TODAS en
+  // cada llamada (renombrar una, el autotítulo al editar el H1, un icono…)
+  // disparaba sincronización, IndexedDB y el árbol lateral por cada nota de
+  // la bóveda (100–240 ms por tecla en el título con ~500 notas).
   const setFiles = useCallback((updater) => {
     const current = Array.from(yFiles.values()).map(m => ({
-      ...m, content: getContent(m.id).toString(),
+      ...m, content: getContentString(m.id),
     }));
     const next = typeof updater === 'function' ? updater(current) : updater;
     ydoc.transact(() => {
@@ -7636,9 +7706,8 @@ function EdinotApp() {
       }
       for (const f of next) {
         const { content, ...meta } = f;
-        yFiles.set(f.id, meta);
-        const prev = getContent(f.id).toString();
-        if (content !== undefined && content !== prev) setContent(f.id, content);
+        if (!sameFileMeta(yFiles.get(f.id), meta)) yFiles.set(f.id, meta);
+        if (content !== undefined && content !== getContentString(f.id)) setContent(f.id, content);
       }
     });
   }, []);
@@ -8855,6 +8924,8 @@ function EdinotApp() {
           title: ev.title || 'Recordatorio',
           anchor: ev.anchor || null,
           recurring,
+          // Línea `- [ ] … ⏰`: «Hecho» la marca en la nota.
+          task: ev.source === 'inline' && ev.status === 'open',
           fireAt,
         });
       }
@@ -14296,6 +14367,28 @@ function EdinotApp() {
               // Whole-series v1: "Descartar" acknowledges just THIS occurrence,
               // never the series. The fired occurrence is past; re-syncing arms
               // the next one. (Deleting the series is done from the calendar.)
+              setReminderResyncTick(t => t + 1);
+              setReminderQueue(q => q.filter(r => r.id !== id));
+              return;
+            }
+            const fallback = { kind: 'reminder', title: item.title, start: item.fireAt ? new Date(item.fireAt).toISOString() : null, remindAt: item.fireAt ? new Date(item.fireAt).toISOString() : null, noteId: item.noteId, anchor: item.anchor };
+            dismissEvent(item.vaultId, id, fallback);
+            try { window.electronAPI && window.electronAPI.remindersAction(id, 'dismiss'); } catch {}
+            setReminderQueue(q => q.filter(r => r.id !== id));
+          }}
+          onDone={async () => {
+            if (!activeReminder) return;
+            const { id, item } = activeReminder;
+            setReminderQueue(q => q.filter(r => r.id !== id));
+            // Tarea en una nota: marca su casilla (`- [ ]` → `- [x]`); el
+            // aviso deja de sonar porque la tarea pasa a 'done'. Si no se
+            // puede (nota sin cargar, línea cambiada), se descarta el aviso.
+            if (item && item.task && item.noteId && await tickReminderTask(item, syncCfgRef.current)) {
+              try { window.electronAPI && window.electronAPI.remindersAction(id, 'dismiss'); } catch {}
+              setReminderResyncTick(t => t + 1);
+              return;
+            }
+            if (item && item.recurring) {
               setReminderResyncTick(t => t + 1);
               setReminderQueue(q => q.filter(r => r.id !== id));
               return;
